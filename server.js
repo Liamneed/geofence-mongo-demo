@@ -544,7 +544,12 @@ async function handleHackneyLocation(req, res) {
 
     console.log('HackneyLocation payload on path', req.path);
     console.log('Webhook content-type:', req.headers['content-type']);
-    console.log('Webhook parsed:', norm.parsed, 'type:', Array.isArray(body) ? 'array' : typeof body);
+    console.log(
+      'Webhook parsed:',
+      norm.parsed,
+      'type:',
+      Array.isArray(body) ? 'array' : typeof body
+    );
 
     // If it's still a string at this point, log a short preview and exit quickly
     if (typeof body === 'string') {
@@ -552,22 +557,54 @@ async function handleHackneyLocation(req, res) {
       return res.json({ ok: true, ignored: true, reason: 'string-body' });
     }
 
-    // Normalise payload into a list of track-like objects
-    // Shape A: { EventType, VehicleTracks: [...] }
-    // Shape B: top-level array: [ {...}, {...} ]
-    // Shape C: single object with Vehicle/CurrentLocation (rare)
-    let tracks = null;
+    // Extract VehicleTrack-like objects from any known shape
+    function extractTracks(payload) {
+      if (!payload) return null;
 
-    if (body && Array.isArray(body.VehicleTracks)) {
-      tracks = body.VehicleTracks;
-    } else if (Array.isArray(body)) {
-      tracks = body;
-    } else if (body && typeof body === 'object' && (body.Vehicle || body.CurrentLocation || body.Location)) {
-      tracks = [body];
+      // Shape A: { EventType, VehicleTracks: [...] }
+      if (Array.isArray(payload.VehicleTracks)) return payload.VehicleTracks;
+
+      // Shape B: top-level array
+      if (Array.isArray(payload)) {
+        const out = [];
+
+        for (const item of payload) {
+          if (!item) continue;
+
+          // B1: array of envelopes: [{ EventType, VehicleTracks:[...] }, ...]
+          if (Array.isArray(item.VehicleTracks)) {
+            out.push(...item.VehicleTracks);
+            continue;
+          }
+
+          // B2: array of raw tracks: [{ Vehicle, CurrentLocation }, ...]
+          if (typeof item === 'object' && (item.Vehicle || item.CurrentLocation || item.Location || item.location)) {
+            out.push(item);
+            continue;
+          }
+        }
+
+        return out.length ? out : null;
+      }
+
+      // Shape C: single object with Vehicle/CurrentLocation/Location
+      if (
+        typeof payload === 'object' &&
+        (payload.Vehicle || payload.CurrentLocation || payload.Location || payload.location)
+      ) {
+        return [payload];
+      }
+
+      return null;
     }
 
+    const tracks = extractTracks(body);
+
     if (!tracks || !tracks.length) {
-      const keys = (body && typeof body === 'object') ? Object.keys(body) : [];
+      const keys =
+        (body && typeof body === 'object' && !Array.isArray(body))
+          ? Object.keys(body)
+          : [];
       console.log('ℹ️ Ignoring location webhook payload (no usable VehicleTracks/array/object)', {
         path: req.path,
         keys,
@@ -577,9 +614,12 @@ async function handleHackneyLocation(req, res) {
     }
 
     console.log(`Processing ${tracks.length} track items`);
+    if (tracks[0] && typeof tracks[0] === 'object') {
+      console.log('Sample track keys:', Object.keys(tracks[0]));
+    }
 
     const ops = tracks.map((t) => {
-      if (!t) return null;
+      if (!t || typeof t !== 'object') return null;
 
       // Some payloads are nested, some are flatter
       const v = t.Vehicle || t.vehicle || {};

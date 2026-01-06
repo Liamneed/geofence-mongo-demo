@@ -499,8 +499,8 @@ app.post('/api/track', async (req, res) => {
 });
 
 function normaliseWebhookBody(raw) {
-  // Express normally gives us an object. But some webhooks arrive as a JSON string
-  // (e.g. "OK" or "{\"EventType\":...}") and express.json will parse that into a JS string.
+  // Express normally gives us an object/array.
+  // But some webhooks arrive as a JSON string and express.json can leave it as a JS string.
   let body = raw;
 
   // If it's a Buffer, convert to string
@@ -516,7 +516,7 @@ function normaliseWebhookBody(raw) {
     try {
       body = JSON.parse(trimmed);
     } catch {
-      // Not JSON (despite content-type) — leave as string
+      // Not JSON — leave as string
       return { body: trimmed, parsed: false };
     }
 
@@ -536,189 +536,127 @@ function normaliseWebhookBody(raw) {
   return { body, parsed: true };
 }
 
-// --- HackneyLocation / VehicleTracksChanged handler ---
+// --- HackneyLocation / VehiclePosition handler (unified) ---
 async function handleHackneyLocation(req, res) {
   try {
     const norm = normaliseWebhookBody(req.body);
-const body = norm.body || {};
-console.log('HackneyLocation payload on path', req.path);
+    const body = norm.body;
 
-console.log('Webhook content-type:', req.headers['content-type']);
-console.log('Webhook parsed:', norm.parsed, 'type:', typeof body);
+    console.log('HackneyLocation payload on path', req.path);
+    console.log('Webhook content-type:', req.headers['content-type']);
+    console.log('Webhook parsed:', norm.parsed, 'type:', Array.isArray(body) ? 'array' : typeof body);
 
-// If it's still a string at this point, log a short preview and exit quickly
-if (typeof body === 'string') {
-  console.log('ℹ️ Webhook body is non-location string:', body.slice(0, 200));
-  return res.json({ ok: true, ignored: true, reason: 'string-body' });
-}
-
-// Some webhooks send an array of track objects directly
-if (Array.isArray(body)) {
-  console.log(`Processing array payload: ${body.length} items`);
-  const ops = body.map(t => {
-    // Try to treat each element like a VehicleTrack
-    const v = t.Vehicle || t.vehicle || {};
-    const loc = t.CurrentLocation || t.currentLocation || t.Location || t.location || {};
-
-    const callsign = String(
-      v.Callsign || v.callsign || t.Callsign || t.callsign || t.callSign || t.VehicleCallsign || ''
-    ).trim();
-
-    const lat = parseFloat(
-      loc.Latitude ?? loc.latitude ?? t.Latitude ?? t.latitude ?? t.lat
-    );
-    const lon = parseFloat(
-      loc.Longitude ?? loc.longitude ?? t.Longitude ?? t.longitude ?? t.lon ?? t.lng
-    );
-
-    const ts = t.Timestamp || t.timestamp || body.Timestamp;
-    const status = t.VehicleStatus || t.vehicleStatus || body.VehicleStatus || 'Unknown';
-
-    const autocabId =
-      (typeof v.Id === 'number' && v.Id) ||
-      (typeof t.VehicleId === 'number' && t.VehicleId) ||
-      (typeof t.AutocabId === 'number' && t.AutocabId) ||
-      null;
-
-    if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) return null;
-
-    return processVehiclePing(callsign, lat, lon, ts, status, {
-      autocabId,
-      Id: autocabId,
-      registration: v.Registration || v.registration || null,
-      plateNumber: v.PlateNumber || v.plateNumber || null
-    });
-  });
-
-  await Promise.all(ops.filter(Boolean));
-  return res.json({ ok: true, processed: body.length });
-}
-
-    // Batch format: { EventType, VehicleTracks: [...] }
-    if (Array.isArray(body.VehicleTracks)) {
-      const tracks = body.VehicleTracks;
-      console.log(`Processing ${tracks.length} vehicle tracks`);
-
-      const ops = tracks.map(t => {
-        if (!t || !t.Vehicle || !t.CurrentLocation) return null;
-
-        const v   = t.Vehicle;
-        const loc = t.CurrentLocation;
-
-        // Callsign string used as primary vehicleId in our UI
-        const callsign = String(
-          v.Callsign ||
-          v.Registration ||
-          v.PlateNumber ||
-          v.Id ||
-          ''
-        ).trim();
-
-        // Try multiple fields for the Autocab vehicle Id
-        const autocabId =
-          (typeof v.Id === 'number' && v.Id) ||
-          (typeof v.VehicleId === 'number' && v.VehicleId) ||
-          (typeof t.VehicleId === 'number' && t.VehicleId) ||
-          (typeof t.AutocabId === 'number' && t.AutocabId) ||
-          null;
-
-        const lat = parseFloat(loc.Latitude);
-        const lon = parseFloat(loc.Longitude);
-        const ts  = t.Timestamp || body.Timestamp;
-        const status = t.VehicleStatus || body.VehicleStatus || 'Unknown';
-
-        if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) {
-          return null;
-        }
-
-        const meta = {
-          autocabId,
-          Id: autocabId,
-          registration: v.Registration || null,
-          plateNumber: v.PlateNumber || null
-        };
-
-        return processVehiclePing(callsign, lat, lon, ts, status, meta);
-      });
-
-      await Promise.all(ops.filter(Boolean));
-      return res.json({ ok: true, processed: tracks.length });
+    // If it's still a string at this point, log a short preview and exit quickly
+    if (typeof body === 'string') {
+      console.log('ℹ️ Webhook body is non-location string:', body.slice(0, 200));
+      return res.json({ ok: true, ignored: true, reason: 'string-body' });
     }
 
-    // Single-object fallback
-    const v   = body.Vehicle || {};
-    const loc = body.CurrentLocation || {};
+    // Normalise payload into a list of track-like objects
+    // Shape A: { EventType, VehicleTracks: [...] }
+    // Shape B: top-level array: [ {...}, {...} ]
+    // Shape C: single object with Vehicle/CurrentLocation (rare)
+    let tracks = null;
 
-    const callsign = String(
-      body.vehicleId   ||
-      body.VehicleId   ||
-      body.callSign    ||
-      body.Callsign    ||
-      v.Callsign       ||
-      v.Registration   ||
-      v.PlateNumber    ||
-      v.Id             ||
-      ''
-    ).trim();
+    if (body && Array.isArray(body.VehicleTracks)) {
+      tracks = body.VehicleTracks;
+    } else if (Array.isArray(body)) {
+      tracks = body;
+    } else if (body && typeof body === 'object' && (body.Vehicle || body.CurrentLocation || body.Location)) {
+      tracks = [body];
+    }
 
-    // Try multiple places for Autocab Id
-    const autocabId =
-      (typeof v.Id === 'number' && v.Id) ||
-      (typeof v.VehicleId === 'number' && v.VehicleId) ||
-      (typeof body.VehicleId === 'number' && body.VehicleId) ||
-      (typeof body.AutocabId === 'number' && body.AutocabId) ||
-      null;
+    if (!tracks || !tracks.length) {
+      const keys = (body && typeof body === 'object') ? Object.keys(body) : [];
+      console.log('ℹ️ Ignoring location webhook payload (no usable VehicleTracks/array/object)', {
+        path: req.path,
+        keys,
+        EventType: body && (body.EventType || body.eventType) ? (body.EventType || body.eventType) : null
+      });
+      return res.json({ ok: true, ignored: true, reason: 'no-tracks' });
+    }
 
-    const lat = parseFloat(
-      body.lat       ??
-      body.latitude  ??
-      body.Latitude  ??
-      loc.Latitude
-    );
-    const lon = parseFloat(
-      body.lon       ??
-      body.longitude ??
-      body.Longitude ??
-      body.lng       ??
-      loc.Longitude
-    );
-    const ts  = body.ts || body.timestamp || body.Timestamp;
-    const status = body.VehicleStatus || body.status || 'Unknown';
+    console.log(`Processing ${tracks.length} track items`);
 
-    if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) {
-  console.log('ℹ️ Ignoring location webhook payload (no usable Vehicle/Location)', {
-    path: req.path,
-    keys: Object.keys(body),
-    EventType: body.EventType || body.eventType || null
-  });
-  return res.json({ ok: true, ignored: true });
-}
+    const ops = tracks.map((t) => {
+      if (!t) return null;
 
+      // Some payloads are nested, some are flatter
+      const v = t.Vehicle || t.vehicle || {};
+      const loc =
+        t.CurrentLocation ||
+        t.currentLocation ||
+        t.Location ||
+        t.location ||
+        {};
 
-    const meta = {
-      autocabId,
-      Id: autocabId,
-      registration: v.Registration || null,
-      plateNumber: v.PlateNumber || null
-    };
+      // Callsign string used as primary vehicleId in our UI
+      const callsign = String(
+        t.vehicleId || t.VehicleId || t.callSign || t.Callsign ||
+        v.Callsign || v.callsign || v.callSign ||
+        v.Registration || v.registration ||
+        v.PlateNumber || v.plateNumber ||
+        ''
+      ).trim();
 
-    await processVehiclePing(callsign, lat, lon, ts, status, meta);
-    return res.json({ ok: true, processed: 1 });
+      const lat = parseFloat(
+        loc.Latitude ?? loc.latitude ?? t.Latitude ?? t.latitude ?? t.lat
+      );
+      const lon = parseFloat(
+        loc.Longitude ?? loc.longitude ?? t.Longitude ?? t.longitude ?? t.lon ?? t.lng
+      );
+
+      const ts =
+        t.Timestamp ||
+        t.timestamp ||
+        (body && body.Timestamp) ||
+        (body && body.timestamp) ||
+        new Date().toISOString();
+
+      const status =
+        t.VehicleStatus ||
+        t.vehicleStatus ||
+        (body && body.VehicleStatus) ||
+        (body && body.vehicleStatus) ||
+        'Unknown';
+
+      // Try multiple places for Autocab vehicle Id (numeric)
+      const autocabId =
+        (typeof v.Id === 'number' && v.Id) ||
+        (typeof v.VehicleId === 'number' && v.VehicleId) ||
+        (typeof t.VehicleId === 'number' && t.VehicleId) ||
+        (typeof t.AutocabId === 'number' && t.AutocabId) ||
+        null;
+
+      if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) {
+        return null;
+      }
+
+      const meta = {
+        autocabId,
+        Id: autocabId,
+        registration: v.Registration || v.registration || null,
+        plateNumber: v.PlateNumber || v.plateNumber || null
+      };
+
+      return processVehiclePing(callsign, lat, lon, ts, status, meta);
+    });
+
+    await Promise.all(ops.filter(Boolean));
+    return res.json({ ok: true, processed: tracks.length });
   } catch (err) {
     console.error('Error in HackneyLocation handler:', err);
     return res.status(500).json({ error: 'HackneyLocation failed' });
   }
 }
 
-// Match any path containing "HackneyLocation" (handles stray spaces etc.)
+// Match any path containing these (handles stray spaces etc.)
 app.post(/(HackneyLocation|VehiclePosition|VehicleTracksChanged)/i, handleHackneyLocation);
-
 
 // Acknowledge other Autocab event hooks we don't process (prevents retries/noise)
 app.post(/(BookingComplete|BookingCreated|Dispatched|shift)/i, (req, res) => {
   res.json({ ok: true });
 });
-
 
 // --- Events for frontend (ENTER / EXIT feed) ---
 app.get('/api/events', (req, res) => {

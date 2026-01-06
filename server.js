@@ -1,8 +1,8 @@
 // server.js
 require('dotenv').config();
-const express  = require('express');
-const path     = require('path');
-const turf     = require('@turf/turf');
+const express = require('express');
+const path = require('path');
+const turf = require('@turf/turf');
 const mongoose = require('mongoose');
 
 // Use built-in fetch if available (Node 18+), otherwise lazy-import node-fetch
@@ -12,7 +12,7 @@ if (!fetchFn) {
     import('node-fetch').then(({ default: fetch }) => fetch(...args));
 }
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Toggle for LIVE mode (real Autocab calls vs DRY-RUN) – used as default
@@ -20,11 +20,13 @@ const LIVE_ENABLED =
   String(process.env.AUTOBUSY_LIVE_ENABLED || '').toLowerCase() === 'true';
 
 // Base URL for Autocab APIs (used for vehicle list + messaging/busy)
-const AUTOCAB_BASE_URL =
-  (process.env.AUTOCAB_BASE_URL || 'https://autocab-api.azure-api.net').replace(/\/+$/, '');
+const AUTOCAB_BASE_URL = (
+  process.env.AUTOCAB_BASE_URL || 'https://autocab-api.azure-api.net'
+).replace(/\/+$/, '');
 
 // --- MongoDB connection ---
-const mongoUri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/geofence_demo';
+const mongoUri =
+  process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/geofence_demo';
 
 mongoose
   .connect(mongoUri, { dbName: process.env.MONGO_DB || 'geofence_demo' })
@@ -62,7 +64,9 @@ function serialiseSettings(doc) {
     name: 'global',
     mode: doc.mode || 'off',
     autoBusyMsgEnabled:
-      typeof doc.autoBusyMsgEnabled === 'boolean' ? doc.autoBusyMsgEnabled : true,
+      typeof doc.autoBusyMsgEnabled === 'boolean'
+        ? doc.autoBusyMsgEnabled
+        : true,
     timerMsgEnabled:
       typeof doc.timerMsgEnabled === 'boolean' ? doc.timerMsgEnabled : true,
     autoBusyMsgText: doc.autoBusyMsgText || 'AutoPob Activated',
@@ -86,8 +90,8 @@ app.use((req, _res, next) => {
 // --- In-memory state ---
 // vehicleId here is your *callsign* (e.g. "113", "9997")
 const lastMembership = new Map(); // callsign -> Set(geofenceIds)
-const vehicles       = new Map(); // callsign -> { vehicleId, lat, lon, ts, status, autocabId, Id, registration, plateNumber }
-const events         = [];        // [{ type, vehicleId, callsign, status, geofenceId, geofenceName, ts, autocabId, Id, Vehicle, ... }]
+const vehicles = new Map(); // callsign -> { vehicleId, lat, lon, ts, status, autocabId, Id, registration, plateNumber }
+const events = []; // [{ type, vehicleId, callsign, status, geofenceId, geofenceName, ts, autocabId, Id, Vehicle, ... }]
 const lastStatusByCallsign = new Map(); // callsign -> last known status string
 
 // --- Vehicle directory from Autocab (callsign → Autocab id) ---
@@ -96,16 +100,72 @@ const lastStatusByCallsign = new Map(); // callsign -> last known status string
  *   vehicleDirectory: callsign -> { id, callsign, status, raw }
  *   vehicleDirectoryById: autocabId(number) -> callsign
  */
-let vehicleDirectory     = new Map();
+let vehicleDirectory = new Map();
 let vehicleDirectoryById = new Map();
-let lastVehicleRefresh   = 0;
+let lastVehicleRefresh = 0;
 
 function normaliseCallsign(cs) {
   return String(cs || '')
     .trim()
     .toUpperCase()
-    .replace(/^PH/, '')   // strip PH9997 first
-    .replace(/^H/, '');   // then strip H9997
+    .replace(/^PH/, '') // strip PH9997 first
+    .replace(/^H/, ''); // then strip H9997
+}
+
+/**
+ * Best-effort status normaliser:
+ * - Accepts strings or objects (e.g. { Name: "Clear" })
+ * - Returns trimmed string or null
+ */
+function normaliseStatus(value) {
+  if (value == null) return null;
+
+  // Sometimes status arrives as an object
+  if (typeof value === 'object') {
+    value =
+      value.Name ??
+      value.name ??
+      value.Text ??
+      value.text ??
+      value.Status ??
+      value.status ??
+      null;
+  }
+
+  if (value == null) return null;
+
+  const s = String(value).trim();
+  return s ? s : null;
+}
+
+/**
+ * Extract status like the previous version:
+ * - Prefer track-level VehicleStatus
+ * - Fall back to body-level VehicleStatus
+ * - Default to "Unknown"
+ */
+function extractStatusLikePrevious(track, body) {
+  // Mirror the old behaviour (t.VehicleStatus || body.VehicleStatus || 'Unknown')
+  const s =
+    normaliseStatus(track?.VehicleStatus) ??
+    normaliseStatus(track?.vehicleStatus) ??
+    normaliseStatus(track?.Status) ??
+    normaliseStatus(track?.status) ??
+    normaliseStatus(track?.Vehicle?.VehicleStatus) ??
+    normaliseStatus(track?.Vehicle?.Status) ??
+    normaliseStatus(track?.VehicleState) ??
+    normaliseStatus(track?.vehicleState) ??
+    normaliseStatus(track?.State) ??
+    normaliseStatus(track?.state) ??
+    normaliseStatus(body?.VehicleStatus) ??
+    normaliseStatus(body?.vehicleStatus) ??
+    normaliseStatus(body?.Status) ??
+    normaliseStatus(body?.status) ??
+    normaliseStatus(body?.State) ??
+    normaliseStatus(body?.state) ??
+    null;
+
+  return s || 'Unknown';
 }
 
 async function refreshVehicleDirectory(force = false) {
@@ -115,7 +175,9 @@ async function refreshVehicleDirectory(force = false) {
 
   const subKey = process.env.AUTOCAB_SUBSCRIPTION_KEY || '';
   if (!subKey) {
-    console.warn('[Vehicles] AUTOCAB_SUBSCRIPTION_KEY not configured; directory refresh skipped');
+    console.warn(
+      '[Vehicles] AUTOCAB_SUBSCRIPTION_KEY not configured; directory refresh skipped'
+    );
     return;
   }
 
@@ -128,17 +190,24 @@ async function refreshVehicleDirectory(force = false) {
       method: 'GET',
       headers: {
         'Ocp-Apim-Subscription-Key': subKey,
-        'Cache-Control': 'no-cache'
-      }
+        'Cache-Control': 'no-cache',
+      },
     });
   } catch (err) {
-    console.error('[Vehicles] Fetch error during vehicle directory refresh:', err.message);
+    console.error(
+      '[Vehicles] Fetch error during vehicle directory refresh:',
+      err.message
+    );
     return;
   }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    console.error('[Vehicles] Autocab /vehicle/v1/vehicles error:', res.status, body.slice(0, 400));
+    console.error(
+      '[Vehicles] Autocab /vehicle/v1/vehicles error:',
+      res.status,
+      body.slice(0, 400)
+    );
     return;
   }
 
@@ -146,14 +215,17 @@ async function refreshVehicleDirectory(force = false) {
   try {
     data = await res.json();
   } catch (err) {
-    console.error('[Vehicles] Failed to parse JSON from vehicle directory:', err.message);
+    console.error(
+      '[Vehicles] Failed to parse JSON from vehicle directory:',
+      err.message
+    );
     return;
   }
 
-  const nextMap  = new Map();
+  const nextMap = new Map();
   const nextById = new Map();
 
-  (data || []).forEach(v => {
+  (data || []).forEach((v) => {
     if (!v) return;
     if (v.isActive === false) return;
 
@@ -164,45 +236,48 @@ async function refreshVehicleDirectory(force = false) {
     if (typeof id !== 'number') return;
 
     // NOTE: depending on tenant/config, /vehicles may or may not include status fields.
-    const status =
+    const status = normaliseStatus(
       v.status ||
-      v.vehicleStatus ||
-      v.VehicleStatus ||
-      v.state ||
-      v.State ||
-      v.currentStatus ||
-      v.CurrentStatus ||
-      null;
+        v.vehicleStatus ||
+        v.VehicleStatus ||
+        v.state ||
+        v.State ||
+        v.currentStatus ||
+        v.CurrentStatus ||
+        null
+    );
 
     nextMap.set(cs, { id, callsign: cs, status, raw: v });
     nextById.set(id, cs);
 
     // Seed status cache if directory provides it
     if (status) {
-      lastStatusByCallsign.set(cs, String(status));
+      lastStatusByCallsign.set(cs, status);
       const vr = vehicles.get(cs);
       if (vr) {
-        vr.status = String(status);
+        vr.status = status;
         vehicles.set(cs, vr);
       }
     }
   });
 
-  vehicleDirectory     = nextMap;
+  vehicleDirectory = nextMap;
   vehicleDirectoryById = nextById;
-  lastVehicleRefresh   = now;
+  lastVehicleRefresh = now;
 
-  console.log(`[Vehicles] Directory updated – ${vehicleDirectory.size} active vehicles loaded`);
+  console.log(
+    `[Vehicles] Directory updated – ${vehicleDirectory.size} active vehicles loaded`
+  );
 }
 
 // Initial load of vehicle directory on startup
-refreshVehicleDirectory(true).catch(err =>
+refreshVehicleDirectory(true).catch((err) =>
   console.error('Initial vehicle directory load failed:', err)
 );
 
 // Periodic refresh (every 15 minutes)
 setInterval(() => {
-  refreshVehicleDirectory(false).catch(err =>
+  refreshVehicleDirectory(false).catch((err) =>
     console.error('Periodic vehicle directory refresh failed:', err)
   );
 }, 15 * 60 * 1000);
@@ -212,9 +287,11 @@ function pushEvent(ev) {
   events.push(ev);
   if (events.length > 500) events.shift(); // keep recent only
   console.log(
-    `[${ev.type}] ${ev.callsign} ${ev.type === 'ENTER' ? 'ENTERED' : 'EXITED'} ` +
-    `${ev.geofenceName || ev.geofenceId} at ${ev.ts} (status: ${ev.status || 'n/a'})` +
-    (ev.autocabId ? ` [AutocabId ${ev.autocabId}]` : '')
+    `[${ev.type}] ${ev.callsign} ${
+      ev.type === 'ENTER' ? 'ENTERED' : 'EXITED'
+    } ${ev.geofenceName || ev.geofenceId} at ${ev.ts} (status: ${
+      ev.status || 'n/a'
+    })` + (ev.autocabId ? ` [AutocabId ${ev.autocabId}]` : '')
   );
 }
 
@@ -227,19 +304,20 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   const timestamp = ts || new Date().toISOString();
 
   // Status fallback chain:
-  //   1) explicit status from webhook
-  //   2) cached lastStatusByCallsign
+  //   1) explicit status from webhook (already "Unknown" if missing, like previous version)
+  //   2) cached lastStatusByCallsign (only if explicit status is Unknown)
   //   3) directory status (if any)
   //   4) Unknown
-  const cached = lastStatusByCallsign.get(String(vehicleId));
+  const incoming = normaliseStatus(status) || 'Unknown';
+
+  const cached = normaliseStatus(lastStatusByCallsign.get(String(vehicleId)));
   const dirEntry = vehicleDirectory.get(normaliseCallsign(vehicleId));
-  const dirStatus = dirEntry ? dirEntry.status : null;
+  const dirStatus = normaliseStatus(dirEntry ? dirEntry.status : null);
 
   const cleanStatus =
-    (status && String(status).trim()) ||
-    (cached && String(cached).trim()) ||
-    (dirStatus && String(dirStatus).trim()) ||
-    'Unknown';
+    incoming !== 'Unknown'
+      ? incoming
+      : cached || dirStatus || 'Unknown';
 
   // Cache it so later pings can inherit it
   if (cleanStatus && cleanStatus !== 'Unknown') {
@@ -261,14 +339,14 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     autocabId: autoId,
     Id: autoId,
     registration: meta.registration || null,
-    plateNumber:  meta.plateNumber  || null
+    plateNumber: meta.plateNumber || null,
   };
 
   vehicles.set(vehicleId, vehicleRecord);
 
   // Load geofences and compute membership
   const geofences = await Geofence.find().lean();
-  const point     = turf.point([lon, lat]);
+  const point = turf.point([lon, lat]);
   const insideNow = [];
 
   for (const g of geofences) {
@@ -284,7 +362,7 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   }
 
   const prevSet = lastMembership.get(vehicleId) || new Set();
-  const nowSet  = new Set(insideNow);
+  const nowSet = new Set(insideNow);
 
   const baseEvent = {
     vehicleId,
@@ -294,19 +372,19 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     Id: vehicleRecord.Id,
     Vehicle: vehicleRecord.Id != null ? { Id: vehicleRecord.Id } : undefined,
     registration: vehicleRecord.registration,
-    plateNumber:  vehicleRecord.plateNumber,
-    ts: timestamp
+    plateNumber: vehicleRecord.plateNumber,
+    ts: timestamp,
   };
 
   // ENTER events
   for (const gid of insideNow) {
     if (!prevSet.has(gid)) {
-      const gf = geofences.find(x => String(x._id) === gid);
+      const gf = geofences.find((x) => String(x._id) === gid);
       pushEvent({
         ...baseEvent,
         type: 'ENTER',
         geofenceId: gid,
-        geofenceName: (gf && gf.name) || `Geofence ${gid}`
+        geofenceName: (gf && gf.name) || `Geofence ${gid}`,
       });
     }
   }
@@ -314,12 +392,12 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   // EXIT events
   for (const gid of prevSet) {
     if (!nowSet.has(gid)) {
-      const gf = geofences.find(x => String(x._id) === gid);
+      const gf = geofences.find((x) => String(x._id) === gid);
       pushEvent({
         ...baseEvent,
         type: 'EXIT',
         geofenceId: gid,
-        geofenceName: (gf && gf.name) || `Geofence ${gid}`
+        geofenceName: (gf && gf.name) || `Geofence ${gid}`,
       });
     }
   }
@@ -382,7 +460,9 @@ app.put('/api/geofences/:id', async (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    const gf = await Geofence.findByIdAndUpdate(req.params.id, update, { new: true });
+    const gf = await Geofence.findByIdAndUpdate(req.params.id, update, {
+      new: true,
+    });
     if (!gf) return res.status(404).json({ error: 'Not found' });
 
     console.log(`✏️ Geofence updated: ${gf._id} (${gf.name})`);
@@ -404,13 +484,17 @@ app.delete('/api/geofences/:id', async (req, res) => {
     try {
       const doc = await getOrCreateSettings();
       const before = doc.zoneOverrides.length;
-      doc.zoneOverrides = (doc.zoneOverrides || []).filter(ov =>
-        ov.label !== gf.name && ov.key !== gf.name.toLowerCase()
+      doc.zoneOverrides = (doc.zoneOverrides || []).filter(
+        (ov) => ov.label !== gf.name && ov.key !== gf.name.toLowerCase()
       );
       if (doc.zoneOverrides.length !== before) {
         doc.updatedAt = new Date();
         await doc.save();
-        console.log(`🧹 Removed ${before - doc.zoneOverrides.length} override(s) for deleted zone "${gf.name}"`);
+        console.log(
+          `🧹 Removed ${
+            before - doc.zoneOverrides.length
+          } override(s) for deleted zone "${gf.name}"`
+        );
       }
     } catch (e) {
       console.warn('Failed to clean zoneOverrides for deleted geofence:', e.message);
@@ -453,11 +537,14 @@ app.post('/api/settings', async (req, res) => {
       if (['off', 'dry-run', 'live'].includes(m)) doc.mode = m;
     }
 
-    if (typeof autoBusyMsgEnabled === 'boolean') doc.autoBusyMsgEnabled = autoBusyMsgEnabled;
+    if (typeof autoBusyMsgEnabled === 'boolean')
+      doc.autoBusyMsgEnabled = autoBusyMsgEnabled;
     if (typeof timerMsgEnabled === 'boolean') doc.timerMsgEnabled = timerMsgEnabled;
 
-    if (typeof autoBusyMsgText === 'string') doc.autoBusyMsgText = autoBusyMsgText.trim() || 'AutoPob Activated';
-    if (typeof timerMsgText === 'string') doc.timerMsgText = timerMsgText.trim() || 'Clear Timer Expired';
+    if (typeof autoBusyMsgText === 'string')
+      doc.autoBusyMsgText = autoBusyMsgText.trim() || 'AutoPob Activated';
+    if (typeof timerMsgText === 'string')
+      doc.timerMsgText = timerMsgText.trim() || 'Clear Timer Expired';
 
     if (Number.isFinite(defaultTimerMinutes)) {
       let v = Number(defaultTimerMinutes);
@@ -499,15 +586,7 @@ app.post('/api/track', async (req, res) => {
       return res.status(400).json({ error: 'vehicleId, lat, lon are required' });
     }
 
-    const result = await processVehiclePing(
-      String(vehicleId),
-      lat,
-      lon,
-      ts,
-      status || 'Manual',
-      {}
-    );
-
+    const result = await processVehiclePing(String(vehicleId), lat, lon, ts, status || 'Manual', {});
     res.json({ ok: true, inside: result?.inside || [], ts: result?.ts });
   } catch (err) {
     console.error('Error in /api/track:', err);
@@ -553,7 +632,12 @@ async function handleHackneyLocation(req, res) {
 
     console.log('HackneyLocation payload on path', req.path);
     console.log('Webhook content-type:', req.headers['content-type']);
-    console.log('Webhook parsed:', norm.parsed, 'type:', Array.isArray(body) ? 'array' : typeof body);
+    console.log(
+      'Webhook parsed:',
+      norm.parsed,
+      'type:',
+      Array.isArray(body) ? 'array' : typeof body
+    );
 
     if (typeof body === 'string') {
       console.log('ℹ️ Webhook body is non-location string:', body.slice(0, 200));
@@ -567,8 +651,11 @@ async function handleHackneyLocation(req, res) {
     else if (body && typeof body === 'object') tracks = [body];
 
     if (!tracks || !tracks.length) {
-      const keys = (body && typeof body === 'object') ? Object.keys(body) : [];
-      console.log('ℹ️ Ignoring location webhook payload (no tracks)', { path: req.path, keys });
+      const keys = body && typeof body === 'object' ? Object.keys(body) : [];
+      console.log('ℹ️ Ignoring location webhook payload (no tracks)', {
+        path: req.path,
+        keys,
+      });
       return res.json({ ok: true, ignored: true, reason: 'no-tracks' });
     }
 
@@ -596,10 +683,27 @@ async function handleHackneyLocation(req, res) {
       // Lat/lon commonly under Position or Location
       const pos = t.Position || t.Location || t.CurrentLocation || {};
       const lat = parseFloat(
-        pos.Latitude ?? pos.latitude ?? pos.Lat ?? pos.lat ?? pos.Y ?? t.Latitude ?? t.latitude ?? t.lat
+        pos.Latitude ??
+          pos.latitude ??
+          pos.Lat ??
+          pos.lat ??
+          pos.Y ??
+          t.Latitude ??
+          t.latitude ??
+          t.lat
       );
       const lon = parseFloat(
-        pos.Longitude ?? pos.longitude ?? pos.Lng ?? pos.lng ?? pos.Lon ?? pos.lon ?? pos.X ?? t.Longitude ?? t.longitude ?? t.lon ?? t.lng
+        pos.Longitude ??
+          pos.longitude ??
+          pos.Lng ??
+          pos.lng ??
+          pos.Lon ??
+          pos.lon ??
+          pos.X ??
+          t.Longitude ??
+          t.longitude ??
+          t.lon ??
+          t.lng
       );
 
       // Resolve callsign
@@ -619,15 +723,10 @@ async function handleHackneyLocation(req, res) {
         (body && (body.Received || body.Timestamp || body.timestamp)) ||
         new Date().toISOString();
 
-      // IMPORTANT: do NOT default to "Unknown" here.
-      // This webhook often has no status; we want processVehiclePing to fall back to cached/dir.
-      const status =
-        t.VehicleStatus ||
-        t.vehicleStatus ||
-        t.Status ||
-        t.status ||
-        (body && (body.VehicleStatus || body.vehicleStatus || body.Status || body.status)) ||
-        null;
+      // IMPORTANT CHANGE:
+      // Make status behave like the previous version:
+      //   status = t.VehicleStatus || body.VehicleStatus || 'Unknown'
+      const status = extractStatusLikePrevious(t, body);
 
       if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) return null;
 
@@ -682,16 +781,17 @@ app.post(/shift/i, async (req, res) => {
         (typeof it.AutocabId === 'number' && it.AutocabId) ||
         null;
 
-      const status =
+      const status = normaliseStatus(
         it.VehicleStatus ||
-        it.vehicleStatus ||
-        it.Status ||
-        it.status ||
-        it.ShiftStatus ||
-        it.shiftStatus ||
-        it.State ||
-        it.state ||
-        null;
+          it.vehicleStatus ||
+          it.Status ||
+          it.status ||
+          it.ShiftStatus ||
+          it.shiftStatus ||
+          it.State ||
+          it.state ||
+          null
+      );
 
       if (!status) continue;
 
@@ -702,12 +802,12 @@ app.post(/shift/i, async (req, res) => {
       }
       if (!callsign) continue;
 
-      lastStatusByCallsign.set(String(callsign), String(status));
+      lastStatusByCallsign.set(String(callsign), status);
       updated++;
 
       const vr = vehicles.get(String(callsign));
       if (vr) {
-        vr.status = String(status);
+        vr.status = status;
         vehicles.set(String(callsign), vr);
       }
     }
@@ -726,20 +826,18 @@ app.get('/api/events', (req, res) => {
   const { prefix, callsigns } = req.query;
 
   if (prefix) {
-    latest = latest.filter(ev =>
-      ev.callsign && String(ev.callsign).startsWith(String(prefix))
-    );
+    latest = latest.filter((ev) => ev.callsign && String(ev.callsign).startsWith(String(prefix)));
   }
 
   if (callsigns) {
     const set = new Set(
       String(callsigns)
         .split(',')
-        .map(s => s.trim())
+        .map((s) => s.trim())
         .filter(Boolean)
     );
     if (set.size) {
-      latest = latest.filter(ev => ev.callsign && set.has(String(ev.callsign)));
+      latest = latest.filter((ev) => ev.callsign && set.has(String(ev.callsign)));
     }
   }
 
@@ -752,20 +850,18 @@ app.get('/api/vehicles', (req, res) => {
   let list = Array.from(vehicles.values());
 
   if (prefix) {
-    list = list.filter(v =>
-      v.vehicleId && String(v.vehicleId).startsWith(String(prefix))
-    );
+    list = list.filter((v) => v.vehicleId && String(v.vehicleId).startsWith(String(prefix)));
   }
 
   if (ids) {
     const set = new Set(
       String(ids)
         .split(',')
-        .map(s => s.trim())
+        .map((s) => s.trim())
         .filter(Boolean)
     );
     if (set.size) {
-      list = list.filter(v => v.vehicleId && set.has(String(v.vehicleId)));
+      list = list.filter((v) => v.vehicleId && set.has(String(v.vehicleId)));
     }
   }
 
@@ -787,12 +883,13 @@ app.post('/api/set-busy', async (req, res) => {
       reason: reason || 'geofence-exit',
       zone: zone || null,
       eventTime: eventTime || new Date().toISOString(),
-      rawEvent: rawEvent || null
+      rawEvent: rawEvent || null,
     };
 
-    const baseUrlRaw = process.env.AUTOCAB_VEHICLES_URL || `${AUTOCAB_BASE_URL}/vehicle/v1/vehicles`;
-    const baseUrl    = baseUrlRaw.replace(/\/+$/, '');
-    const subKey     = process.env.AUTOCAB_SUBSCRIPTION_KEY || '';
+    const baseUrlRaw =
+      process.env.AUTOCAB_VEHICLES_URL || `${AUTOCAB_BASE_URL}/vehicle/v1/vehicles`;
+    const baseUrl = baseUrlRaw.replace(/\/+$/, '');
+    const subKey = process.env.AUTOCAB_SUBSCRIPTION_KEY || '';
 
     const requestedMode = (mode || '').toLowerCase();
     let live;
@@ -802,12 +899,11 @@ app.post('/api/set-busy', async (req, res) => {
 
     const vehicleRecord = vehicles.get(String(callsign));
     let autocabId =
-      (rawEvent && (
-        rawEvent.autocabId ??
-        rawEvent.AutocabId ??
-        rawEvent.Id ??
-        (rawEvent.Vehicle && rawEvent.Vehicle.Id)
-      )) ||
+      (rawEvent &&
+        (rawEvent.autocabId ??
+          rawEvent.AutocabId ??
+          rawEvent.Id ??
+          (rawEvent.Vehicle && rawEvent.Vehicle.Id))) ||
       (vehicleRecord && (vehicleRecord.autocabId ?? vehicleRecord.Id)) ||
       null;
 
@@ -821,7 +917,7 @@ app.post('/api/set-busy', async (req, res) => {
       ...payload,
       requestedMode,
       live,
-      resolvedAutocabId: autocabId
+      resolvedAutocabId: autocabId,
     });
 
     if (!live || !baseUrl || !subKey || !autocabId) {
@@ -829,14 +925,14 @@ app.post('/api/set-busy', async (req, res) => {
         live,
         hasBaseUrl: !!baseUrl,
         hasSubKey: !!subKey,
-        autocabId
+        autocabId,
       });
       return res.json({
         ok: true,
         mode: 'dry-run',
         live,
         payload,
-        meta: { LIVE_ENABLED, hasBaseUrl: !!baseUrl, hasSubKey: !!subKey, autocabId }
+        meta: { LIVE_ENABLED, hasBaseUrl: !!baseUrl, hasSubKey: !!subKey, autocabId },
       });
     }
 
@@ -847,19 +943,32 @@ app.post('/api/set-busy', async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Ocp-Apim-Subscription-Key': subKey
+        'Ocp-Apim-Subscription-Key': subKey,
       },
-      body: JSON.stringify({ vehicleId: autocabId })
+      body: JSON.stringify({ vehicleId: autocabId }),
     });
 
     const text = await resp.text();
     if (!resp.ok) {
       console.error('❌ Busy API error', resp.status, text);
-      return res.status(502).json({ error: 'Busy API failed', status: resp.status, body: text, mode: 'live', live: true });
+      return res.status(502).json({
+        error: 'Busy API failed',
+        status: resp.status,
+        body: text,
+        mode: 'live',
+        live: true,
+      });
     }
 
     console.log('✅ Busy API success:', text.slice(0, 500));
-    return res.json({ ok: true, forwarded: true, status: resp.status, body: text, mode: 'live', live: true });
+    return res.json({
+      ok: true,
+      forwarded: true,
+      status: resp.status,
+      body: text,
+      mode: 'live',
+      live: true,
+    });
   } catch (err) {
     console.error('💥 Error in /api/set-busy:', err.message, err.stack);
     return res.status(500).json({ error: 'set-busy failed', message: err.message });
@@ -871,43 +980,52 @@ app.post('/api/set-busy', async (req, res) => {
  */
 app.post('/api/send-message', async (req, res) => {
   try {
-    const { callsign, text, triggerType, zone, autocabId: overrideId, rawEvent } = req.body || {};
-    if (!callsign || !text) return res.status(400).json({ error: 'callsign and text are required' });
+    const { callsign, text, triggerType, zone, autocabId: overrideId, rawEvent } =
+      req.body || {};
+    if (!callsign || !text)
+      return res.status(400).json({ error: 'callsign and text are required' });
 
     const csNorm = normaliseCallsign(callsign);
 
     await refreshVehicleDirectory(false);
     const directoryEntry = vehicleDirectory.get(csNorm);
-    const vehicleRecord  = vehicles.get(String(callsign));
+    const vehicleRecord = vehicles.get(String(callsign));
 
     let autocabId =
       (overrideId && typeof overrideId === 'number' && overrideId) ||
       (directoryEntry && typeof directoryEntry.id === 'number' && directoryEntry.id) ||
-      (rawEvent && (
-        rawEvent.autocabId ??
-        rawEvent.AutocabId ??
-        rawEvent.Id ??
-        (rawEvent.Vehicle && rawEvent.Vehicle.Id)
-      )) ||
+      (rawEvent &&
+        (rawEvent.autocabId ??
+          rawEvent.AutocabId ??
+          rawEvent.Id ??
+          (rawEvent.Vehicle && rawEvent.Vehicle.Id))) ||
       (vehicleRecord && (vehicleRecord.autocabId ?? vehicleRecord.Id)) ||
       null;
 
     console.log('🔔 /api/send-message resolve', {
-      callsign, csNorm, triggerType, zone, overrideId,
+      callsign,
+      csNorm,
+      triggerType,
+      zone,
+      overrideId,
       directoryEntryId: directoryEntry && directoryEntry.id,
       rawEventHasVehicle: !!(rawEvent && rawEvent.Vehicle),
-      resolvedAutocabId: autocabId
+      resolvedAutocabId: autocabId,
     });
 
     if (!autocabId) {
-      return res.status(400).json({ error: `No Autocab vehicleId found for callsign ${callsign}` });
+      return res
+        .status(400)
+        .json({ error: `No Autocab vehicleId found for callsign ${callsign}` });
     }
 
-    const msgUrlRaw = process.env.AUTOCAB_MESSAGE_URL || `${AUTOCAB_BASE_URL}/vehicle/v1/vehicles/message`;
-    const msgUrl    = msgUrlRaw.replace(/\/+$/, '');
+    const msgUrlRaw =
+      process.env.AUTOCAB_MESSAGE_URL || `${AUTOCAB_BASE_URL}/vehicle/v1/vehicles/message`;
+    const msgUrl = msgUrlRaw.replace(/\/+$/, '');
 
     const subKey = process.env.AUTOCAB_SUBSCRIPTION_KEY || '';
-    if (!subKey) return res.status(500).json({ error: 'Autocab subscription key not configured' });
+    if (!subKey)
+      return res.status(500).json({ error: 'Autocab subscription key not configured' });
 
     const payload = { text, vehicles: [autocabId], companies: [], capabilities: [], zones: [] };
 
@@ -918,15 +1036,21 @@ app.post('/api/send-message', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache',
-        'Ocp-Apim-Subscription-Key': subKey
+        'Ocp-Apim-Subscription-Key': subKey,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     const bodyText = await resp.text();
     if (!resp.ok) {
       console.error('❌ Message API error', resp.status, bodyText);
-      return res.status(502).json({ ok: false, status: resp.status, body: bodyText, callsign, autocabId });
+      return res.status(502).json({
+        ok: false,
+        status: resp.status,
+        body: bodyText,
+        callsign,
+        autocabId,
+      });
     }
 
     console.log('✅ Message sent OK →', { callsign, autocabId, triggerType, zone });
@@ -943,7 +1067,7 @@ app.post('/api/debug/mockVehicle', async (_req, res) => {
     const vehicleId = 'TX-DEMO-1';
     const lat = 50.3755;
     const lon = -4.1427;
-    const ts  = new Date().toISOString();
+    const ts = new Date().toISOString();
 
     const result = await processVehiclePing(vehicleId, lat, lon, ts, 'Clear');
     console.log('🐟 Mock vehicle injected', { vehicleId, lat, lon, inside: result?.inside || [] });

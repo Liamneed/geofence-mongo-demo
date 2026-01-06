@@ -88,11 +88,20 @@ app.use((req, _res, next) => {
 });
 
 // --- In-memory state ---
-// vehicleId here is your *callsign* (e.g. "113", "9997")
+// IMPORTANT: we store everything keyed by CANONICAL callsign (normaliseCallsign)
 const lastMembership = new Map(); // callsign -> Set(geofenceIds)
-const vehicles = new Map(); // callsign -> { vehicleId, lat, lon, ts, status, autocabId, Id, registration, plateNumber }
+const vehicles = new Map(); // callsign -> { vehicleId, lat, lon, ts, status, autocabId, Id, registration, plateNumber, rawCallsign }
 const events = []; // [{ type, vehicleId, callsign, status, geofenceId, geofenceName, ts, autocabId, Id, Vehicle, ... }]
 const lastStatusByCallsign = new Map(); // callsign -> last known status string
+const lastUnknownLogAt = new Map(); // callsign -> ms timestamp (throttle Unknown logs)
+
+// --- Webhook debug capture (last payload) ---
+let lastWebhook = {
+  at: null,
+  path: null,
+  headers: null,
+  body: null,
+};
 
 // --- Vehicle directory from Autocab (callsign → Autocab id) ---
 /**
@@ -166,6 +175,12 @@ function extractStatusLikePrevious(track, body) {
     null;
 
   return s || 'Unknown';
+}
+
+function isUnknownStatus(s) {
+  if (s == null) return true;
+  const v = String(s).trim().toLowerCase();
+  return !v || v === 'unknown' || v === 'n/a' || v === 'na';
 }
 
 async function refreshVehicleDirectory(force = false) {
@@ -296,9 +311,10 @@ function pushEvent(ev) {
 }
 
 // Core geofence evaluation
-// meta = { autocabId, Id, registration, plateNumber } (optional)
+// meta = { autocabId, Id, registration, plateNumber, rawCallsign } (optional)
 async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
-  if (!vehicleId) return;
+  const canonical = normaliseCallsign(vehicleId);
+  if (!canonical) return;
   if (typeof lat !== 'number' || typeof lon !== 'number') return;
 
   const timestamp = ts || new Date().toISOString();
@@ -310,18 +326,35 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   //   4) Unknown
   const incoming = normaliseStatus(status) || 'Unknown';
 
-  const cached = normaliseStatus(lastStatusByCallsign.get(String(vehicleId)));
-  const dirEntry = vehicleDirectory.get(normaliseCallsign(vehicleId));
+  const cached = normaliseStatus(lastStatusByCallsign.get(canonical));
+  const dirEntry = vehicleDirectory.get(canonical);
   const dirStatus = normaliseStatus(dirEntry ? dirEntry.status : null);
 
-  const cleanStatus =
-    incoming !== 'Unknown'
-      ? incoming
-      : cached || dirStatus || 'Unknown';
+  const cleanStatus = !isUnknownStatus(incoming)
+    ? incoming
+    : cached || dirStatus || 'Unknown';
 
   // Cache it so later pings can inherit it
-  if (cleanStatus && cleanStatus !== 'Unknown') {
-    lastStatusByCallsign.set(String(vehicleId), cleanStatus);
+  if (cleanStatus && !isUnknownStatus(cleanStatus)) {
+    lastStatusByCallsign.set(canonical, cleanStatus);
+  } else {
+    // Throttled diagnostics: this is the logging that fixes the "why is it Unknown" mystery
+    const now = Date.now();
+    const last = lastUnknownLogAt.get(canonical) || 0;
+    if (now - last > 15_000) {
+      lastUnknownLogAt.set(canonical, now);
+      console.log('⚠️ Status still Unknown after fallback', {
+        callsign: canonical,
+        incoming,
+        cached,
+        dirStatus,
+        hasDirEntry: !!dirEntry,
+        autocabId:
+          (typeof meta.autocabId === 'number' && meta.autocabId) ||
+          (typeof meta.Id === 'number' && meta.Id) ||
+          null,
+      });
+    }
   }
 
   // Normalise Autocab numeric Id (vehicleId used by Autocab APIs)
@@ -331,7 +364,8 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     null;
 
   const vehicleRecord = {
-    vehicleId,
+    vehicleId: canonical,
+    rawCallsign: meta.rawCallsign || vehicleId,
     lat,
     lon,
     ts: timestamp,
@@ -342,7 +376,7 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     plateNumber: meta.plateNumber || null,
   };
 
-  vehicles.set(vehicleId, vehicleRecord);
+  vehicles.set(canonical, vehicleRecord);
 
   // Load geofences and compute membership
   const geofences = await Geofence.find().lean();
@@ -361,12 +395,12 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     }
   }
 
-  const prevSet = lastMembership.get(vehicleId) || new Set();
+  const prevSet = lastMembership.get(canonical) || new Set();
   const nowSet = new Set(insideNow);
 
   const baseEvent = {
-    vehicleId,
-    callsign: vehicleId,
+    vehicleId: canonical,
+    callsign: canonical,
     status: cleanStatus,
     autocabId: vehicleRecord.autocabId,
     Id: vehicleRecord.Id,
@@ -402,7 +436,7 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
     }
   }
 
-  lastMembership.set(vehicleId, nowSet);
+  lastMembership.set(canonical, nowSet);
 
   return { inside: insideNow, ts: timestamp };
 }
@@ -412,7 +446,9 @@ app.post('/api/geofences', async (req, res) => {
   try {
     const { name, geojson } = req.body;
     if (!geojson || !geojson.type) {
-      return res.status(400).json({ error: 'Valid geojson Feature is required' });
+      return res
+        .status(400)
+        .json({ error: 'Valid geojson Feature is required' });
     }
 
     const geom = geojson.geometry || geojson;
@@ -497,7 +533,10 @@ app.delete('/api/geofences/:id', async (req, res) => {
         );
       }
     } catch (e) {
-      console.warn('Failed to clean zoneOverrides for deleted geofence:', e.message);
+      console.warn(
+        'Failed to clean zoneOverrides for deleted geofence:',
+        e.message
+      );
     }
 
     res.json({ ok: true });
@@ -539,7 +578,8 @@ app.post('/api/settings', async (req, res) => {
 
     if (typeof autoBusyMsgEnabled === 'boolean')
       doc.autoBusyMsgEnabled = autoBusyMsgEnabled;
-    if (typeof timerMsgEnabled === 'boolean') doc.timerMsgEnabled = timerMsgEnabled;
+    if (typeof timerMsgEnabled === 'boolean')
+      doc.timerMsgEnabled = timerMsgEnabled;
 
     if (typeof autoBusyMsgText === 'string')
       doc.autoBusyMsgText = autoBusyMsgText.trim() || 'AutoPob Activated';
@@ -583,10 +623,19 @@ app.post('/api/track', async (req, res) => {
   try {
     const { vehicleId, lat, lon, ts, status } = req.body;
     if (!vehicleId || typeof lat !== 'number' || typeof lon !== 'number') {
-      return res.status(400).json({ error: 'vehicleId, lat, lon are required' });
+      return res
+        .status(400)
+        .json({ error: 'vehicleId, lat, lon are required' });
     }
 
-    const result = await processVehiclePing(String(vehicleId), lat, lon, ts, status || 'Manual', {});
+    const result = await processVehiclePing(
+      String(vehicleId),
+      lat,
+      lon,
+      ts,
+      status || 'Manual',
+      { rawCallsign: vehicleId }
+    );
     res.json({ ok: true, inside: result?.inside || [], ts: result?.ts });
   } catch (err) {
     console.error('Error in /api/track:', err);
@@ -630,7 +679,18 @@ async function handleHackneyLocation(req, res) {
     const norm = normaliseWebhookBody(req.body);
     const body = norm.body;
 
-    console.log('HackneyLocation payload on path', req.path);
+    // Save last webhook for debugging
+    lastWebhook = {
+      at: new Date().toISOString(),
+      path: req.path,
+      headers: {
+        'content-type': req.headers['content-type'],
+        'user-agent': req.headers['user-agent'],
+      },
+      body,
+    };
+
+    console.log('--- WEBHOOK HIT ---', req.path);
     console.log('Webhook content-type:', req.headers['content-type']);
     console.log(
       'Webhook parsed:',
@@ -639,8 +699,31 @@ async function handleHackneyLocation(req, res) {
       Array.isArray(body) ? 'array' : typeof body
     );
 
+    // Safe inspection (won't spam terminal)
+    const bodyType = Array.isArray(body) ? 'array' : typeof body;
+    const topKeys =
+      body && !Array.isArray(body) && typeof body === 'object'
+        ? Object.keys(body)
+        : [];
+    console.log(
+      'Webhook bodyType:',
+      bodyType,
+      'top-level keys:',
+      topKeys.slice(0, 50)
+    );
+
+    // Preview first 1500 chars of the JSON body so we can locate status fields
+    try {
+      console.log('Webhook body preview:', JSON.stringify(body).slice(0, 1500));
+    } catch (e) {
+      console.log('Webhook body preview: <unstringifiable>', e.message);
+    }
+
     if (typeof body === 'string') {
-      console.log('ℹ️ Webhook body is non-location string:', body.slice(0, 200));
+      console.log(
+        'ℹ️ Webhook body is non-location string:',
+        body.slice(0, 200)
+      );
       return res.json({ ok: true, ignored: true, reason: 'string-body' });
     }
 
@@ -661,18 +744,31 @@ async function handleHackneyLocation(req, res) {
 
     console.log(`Processing ${tracks.length} track items`);
 
+    // Preview first track/item (so we can see exactly what Autocab is sending)
+    const first = tracks[0];
+    if (first && typeof first === 'object') {
+      console.log('TRACK[0] keys:', Object.keys(first).slice(0, 50));
+      try {
+        console.log('TRACK[0] preview:', JSON.stringify(first).slice(0, 1500));
+      } catch (e) {
+        console.log('TRACK[0] preview: <unstringifiable>', e.message);
+      }
+
+      if (first.Vehicle && typeof first.Vehicle === 'object') {
+        console.log(
+          'TRACK[0].Vehicle keys:',
+          Object.keys(first.Vehicle).slice(0, 50)
+        );
+      }
+    }
+
     // Ensure directory is reasonably fresh (for VehicleAutoID -> callsign)
     await refreshVehicleDirectory(false);
 
-    const first = tracks[0];
-    if (first && typeof first === 'object') {
-      console.log('Sample track keys:', Object.keys(first));
-    }
-
-    const ops = tracks.map((t) => {
+    const ops = tracks.map((t, idx) => {
       if (!t || typeof t !== 'object') return null;
 
-      // This webhook shape uses VehicleAutoID
+      // This webhook shape uses VehicleAutoID (but we check a few variants)
       const autocabId =
         (typeof t.VehicleAutoID === 'number' && t.VehicleAutoID) ||
         (typeof t.VehicleId === 'number' && t.VehicleId) ||
@@ -706,15 +802,17 @@ async function handleHackneyLocation(req, res) {
           t.lng
       );
 
-      // Resolve callsign
-      let callsign = String(t.Callsign || t.callSign || t.callsign || '').trim();
-      if (!callsign && autocabId) {
+      // Resolve callsign (raw + canonical)
+      let rawCallsign = String(
+        t.Callsign || t.callSign || t.callsign || ''
+      ).trim();
+
+      if (!rawCallsign && autocabId) {
         const resolved = vehicleDirectoryById.get(autocabId);
-        if (resolved) callsign = resolved;
+        if (resolved) rawCallsign = resolved;
       }
 
-      // If still missing, fall back to autocabId string so you still see something
-      if (!callsign && autocabId) callsign = String(autocabId);
+      const callsign = normaliseCallsign(rawCallsign || (autocabId ? String(autocabId) : ''));
 
       const ts =
         t.Received ||
@@ -723,19 +821,63 @@ async function handleHackneyLocation(req, res) {
         (body && (body.Received || body.Timestamp || body.timestamp)) ||
         new Date().toISOString();
 
-      // IMPORTANT CHANGE:
-      // Make status behave like the previous version:
+      // Status should match the previous behaviour:
       //   status = t.VehicleStatus || body.VehicleStatus || 'Unknown'
       const status = extractStatusLikePrevious(t, body);
 
+      // Correct, safe logging (no undefined variables)
+      if (idx < 3) {
+        console.log('Resolved track', {
+          path: req.path,
+          idx,
+          autocabId,
+          rawCallsign,
+          callsign,
+          lat: Number.isNaN(lat) ? null : lat,
+          lon: Number.isNaN(lon) ? null : lon,
+          status,
+          ts,
+          statusFields: {
+            t_VehicleStatus: t.VehicleStatus,
+            t_Status: t.Status,
+            t_State: t.State,
+            body_VehicleStatus: body && body.VehicleStatus,
+            body_Status: body && body.Status,
+            body_State: body && body.State,
+          },
+        });
+      }
+
+      // Extra diagnostics ONLY when status is Unknown
+      if (isUnknownStatus(status)) {
+        const tKeys = Object.keys(t).slice(0, 40);
+        console.log('⚠️ Status unresolved at source (Unknown)', {
+          callsign,
+          rawCallsign,
+          autocabId,
+          trackKeys: tKeys,
+        });
+      }
+
       if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) return null;
 
-      const meta = { autocabId, Id: autocabId, registration: null, plateNumber: null };
+      const meta = {
+        autocabId,
+        Id: autocabId,
+        registration: null,
+        plateNumber: null,
+        rawCallsign: rawCallsign || callsign,
+      };
+
       return processVehiclePing(callsign, lat, lon, ts, status, meta);
     });
 
     const results = await Promise.all(ops.filter(Boolean));
-    return res.json({ ok: true, processed: results.length, received: tracks.length });
+    return res.json({
+      ok: true,
+      processed: results.length,
+      received: tracks.length,
+    });
   } catch (err) {
     console.error('Error in HackneyLocation handler:', err);
     return res.status(500).json({ error: 'HackneyLocation failed' });
@@ -746,7 +888,9 @@ async function handleHackneyLocation(req, res) {
 app.post(/(HackneyLocation|VehiclePosition|VehicleTracksChanged)/i, handleHackneyLocation);
 
 // Acknowledge other Autocab event hooks we don't process (prevents retries/noise)
-app.post(/(BookingComplete|BookingCreated|Dispatched)/i, (_req, res) => res.json({ ok: true }));
+app.post(/(BookingComplete|BookingCreated|Dispatched)/i, (_req, res) =>
+  res.json({ ok: true })
+);
 
 /**
  * /shift webhook
@@ -795,21 +939,31 @@ app.post(/shift/i, async (req, res) => {
 
       if (!status) continue;
 
-      let callsign = String(it.Callsign || it.callSign || it.callsign || '').trim();
-      if (!callsign && autocabId) {
+      let rawCallsign = String(it.Callsign || it.callSign || it.callsign || '').trim();
+      if (!rawCallsign && autocabId) {
         const resolved = vehicleDirectoryById.get(autocabId);
-        if (resolved) callsign = resolved;
+        if (resolved) rawCallsign = resolved;
       }
+
+      const callsign = normaliseCallsign(rawCallsign);
       if (!callsign) continue;
 
-      lastStatusByCallsign.set(String(callsign), status);
+      lastStatusByCallsign.set(callsign, status);
       updated++;
 
-      const vr = vehicles.get(String(callsign));
+      const vr = vehicles.get(callsign);
       if (vr) {
         vr.status = status;
-        vehicles.set(String(callsign), vr);
+        vehicles.set(callsign, vr);
       }
+
+      // Helpful shift logging (and confirms callsign canonicalisation)
+      console.log('🟦 /shift status update', {
+        rawCallsign,
+        callsign,
+        autocabId,
+        status,
+      });
     }
 
     return res.json({ ok: true, updated });
@@ -826,14 +980,17 @@ app.get('/api/events', (req, res) => {
   const { prefix, callsigns } = req.query;
 
   if (prefix) {
-    latest = latest.filter((ev) => ev.callsign && String(ev.callsign).startsWith(String(prefix)));
+    const p = normaliseCallsign(prefix);
+    latest = latest.filter(
+      (ev) => ev.callsign && String(ev.callsign).startsWith(p)
+    );
   }
 
   if (callsigns) {
     const set = new Set(
       String(callsigns)
         .split(',')
-        .map((s) => s.trim())
+        .map((s) => normaliseCallsign(s))
         .filter(Boolean)
     );
     if (set.size) {
@@ -850,14 +1007,15 @@ app.get('/api/vehicles', (req, res) => {
   let list = Array.from(vehicles.values());
 
   if (prefix) {
-    list = list.filter((v) => v.vehicleId && String(v.vehicleId).startsWith(String(prefix)));
+    const p = normaliseCallsign(prefix);
+    list = list.filter((v) => v.vehicleId && String(v.vehicleId).startsWith(p));
   }
 
   if (ids) {
     const set = new Set(
       String(ids)
         .split(',')
-        .map((s) => s.trim())
+        .map((s) => normaliseCallsign(s))
         .filter(Boolean)
     );
     if (set.size) {
@@ -874,11 +1032,14 @@ app.get('/api/vehicles', (req, res) => {
  */
 app.post('/api/set-busy', async (req, res) => {
   try {
-    const { callsign, status, reason, zone, eventTime, rawEvent, mode } = req.body || {};
+    const { callsign, status, reason, zone, eventTime, rawEvent, mode } =
+      req.body || {};
     if (!callsign) return res.status(400).json({ error: 'callsign is required' });
 
+    const cs = normaliseCallsign(callsign);
+
     const payload = {
-      callsign,
+      callsign: cs,
       status: status || 'Busy',
       reason: reason || 'geofence-exit',
       zone: zone || null,
@@ -897,7 +1058,7 @@ app.post('/api/set-busy', async (req, res) => {
     else if (requestedMode === 'dry-run' || requestedMode === 'off') live = false;
     else live = LIVE_ENABLED;
 
-    const vehicleRecord = vehicles.get(String(callsign));
+    const vehicleRecord = vehicles.get(cs);
     let autocabId =
       (rawEvent &&
         (rawEvent.autocabId ??
@@ -909,7 +1070,7 @@ app.post('/api/set-busy', async (req, res) => {
 
     if (!autocabId) {
       await refreshVehicleDirectory(false);
-      const entry = vehicleDirectory.get(normaliseCallsign(callsign));
+      const entry = vehicleDirectory.get(cs);
       if (entry && typeof entry.id === 'number') autocabId = entry.id;
     }
 
@@ -937,7 +1098,7 @@ app.post('/api/set-busy', async (req, res) => {
     }
 
     const targetUrl = `${baseUrl}/${autocabId}/mobile`;
-    console.log(`➡️ AutoBusy LIVE → ${targetUrl} (callsign ${callsign})`);
+    console.log(`➡️ AutoBusy LIVE → ${targetUrl} (callsign ${cs})`);
 
     const resp = await fetchFn(targetUrl, {
       method: 'POST',
@@ -989,7 +1150,7 @@ app.post('/api/send-message', async (req, res) => {
 
     await refreshVehicleDirectory(false);
     const directoryEntry = vehicleDirectory.get(csNorm);
-    const vehicleRecord = vehicles.get(String(callsign));
+    const vehicleRecord = vehicles.get(csNorm);
 
     let autocabId =
       (overrideId && typeof overrideId === 'number' && overrideId) ||
@@ -1029,7 +1190,7 @@ app.post('/api/send-message', async (req, res) => {
 
     const payload = { text, vehicles: [autocabId], companies: [], capabilities: [], zones: [] };
 
-    console.log('➡️ /api/send-message LIVE →', { callsign, autocabId, triggerType, zone, msgUrl });
+    console.log('➡️ /api/send-message LIVE →', { callsign: csNorm, autocabId, triggerType, zone, msgUrl });
 
     const resp = await fetchFn(msgUrl, {
       method: 'POST',
@@ -1048,13 +1209,13 @@ app.post('/api/send-message', async (req, res) => {
         ok: false,
         status: resp.status,
         body: bodyText,
-        callsign,
+        callsign: csNorm,
         autocabId,
       });
     }
 
-    console.log('✅ Message sent OK →', { callsign, autocabId, triggerType, zone });
-    return res.json({ ok: true, callsign, autocabId, status: resp.status, body: bodyText });
+    console.log('✅ Message sent OK →', { callsign: csNorm, autocabId, triggerType, zone });
+    return res.json({ ok: true, callsign: csNorm, autocabId, status: resp.status, body: bodyText });
   } catch (err) {
     console.error('💥 Error in /api/send-message:', err.message, err.stack);
     return res.status(500).json({ error: 'send-message failed', message: err.message });
@@ -1069,13 +1230,24 @@ app.post('/api/debug/mockVehicle', async (_req, res) => {
     const lon = -4.1427;
     const ts = new Date().toISOString();
 
-    const result = await processVehiclePing(vehicleId, lat, lon, ts, 'Clear');
-    console.log('🐟 Mock vehicle injected', { vehicleId, lat, lon, inside: result?.inside || [] });
+    const result = await processVehiclePing(vehicleId, lat, lon, ts, 'Clear', {
+      rawCallsign: vehicleId,
+    });
+    console.log('🐟 Mock vehicle injected', {
+      vehicleId: normaliseCallsign(vehicleId),
+      lat,
+      lon,
+      inside: result?.inside || [],
+    });
     res.json({ ok: true, inside: result?.inside || [] });
   } catch (err) {
     console.error('Mock vehicle failed', err);
     res.status(500).json({ error: 'mock failed' });
   }
+});
+
+app.get('/api/debug/last-webhook', (_req, res) => {
+  res.json(lastWebhook);
 });
 
 // --- Start server ---

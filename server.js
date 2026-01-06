@@ -727,11 +727,16 @@ async function handleHackneyLocation(req, res) {
       return res.json({ ok: true, ignored: true, reason: 'string-body' });
     }
 
-    // Normalise into track list
-    let tracks = null;
-    if (body && Array.isArray(body.VehicleTracks)) tracks = body.VehicleTracks;
-    else if (Array.isArray(body)) tracks = body;
-    else if (body && typeof body === 'object') tracks = [body];
+    // Normalise into track list (support multiple Autocab shapes)
+let tracks = null;
+
+if (body && Array.isArray(body.VehicleTracks)) tracks = body.VehicleTracks;
+else if (body && Array.isArray(body.VehicleTracksArray)) tracks = body.VehicleTracksArray;
+else if (body && Array.isArray(body.VehicleTracksChanged)) tracks = body.VehicleTracksChanged;
+else if (body && Array.isArray(body.Tracks)) tracks = body.Tracks;
+else if (Array.isArray(body)) tracks = body;
+else if (body && typeof body === 'object') tracks = [body];
+
 
     if (!tracks || !tracks.length) {
       const keys = body && typeof body === 'object' ? Object.keys(body) : [];
@@ -804,8 +809,9 @@ async function handleHackneyLocation(req, res) {
 
       // Resolve callsign (raw + canonical)
       let rawCallsign = String(
-        t.Callsign || t.callSign || t.callsign || ''
-      ).trim();
+  t.Callsign || t.callSign || t.callsign || (t.Vehicle && (t.Vehicle.Callsign || t.Vehicle.callsign || t.Vehicle.callSign)) || ''
+).trim();
+
 
       if (!rawCallsign && autocabId) {
         const resolved = vehicleDirectoryById.get(autocabId);

@@ -163,6 +163,7 @@ async function refreshVehicleDirectory(force = false) {
     const id = v.id;
     if (typeof id !== 'number') return;
 
+    // NOTE: depending on tenant/config, /vehicles may or may not include status fields.
     const status =
       v.status ||
       v.vehicleStatus ||
@@ -175,6 +176,16 @@ async function refreshVehicleDirectory(force = false) {
 
     nextMap.set(cs, { id, callsign: cs, status, raw: v });
     nextById.set(id, cs);
+
+    // Seed status cache if directory provides it
+    if (status) {
+      lastStatusByCallsign.set(cs, String(status));
+      const vr = vehicles.get(cs);
+      if (vr) {
+        vr.status = String(status);
+        vehicles.set(cs, vr);
+      }
+    }
   });
 
   vehicleDirectory     = nextMap;
@@ -223,6 +234,7 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   const cached = lastStatusByCallsign.get(String(vehicleId));
   const dirEntry = vehicleDirectory.get(normaliseCallsign(vehicleId));
   const dirStatus = dirEntry ? dirEntry.status : null;
+
   const cleanStatus =
     (status && String(status).trim()) ||
     (cached && String(cached).trim()) ||
@@ -607,12 +619,14 @@ async function handleHackneyLocation(req, res) {
         (body && (body.Received || body.Timestamp || body.timestamp)) ||
         new Date().toISOString();
 
-      // Status: payload rarely includes it for this hook, so allow null here and let processVehiclePing fall back to cached/dir
+      // IMPORTANT: do NOT default to "Unknown" here.
+      // This webhook often has no status; we want processVehiclePing to fall back to cached/dir.
       const status =
         t.VehicleStatus ||
         t.vehicleStatus ||
         t.Status ||
         t.status ||
+        (body && (body.VehicleStatus || body.vehicleStatus || body.Status || body.status)) ||
         null;
 
       if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) return null;

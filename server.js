@@ -90,6 +90,7 @@ app.use((req, _res, next) => {
 const lastMembership = new Map(); // callsign -> Set(geofenceIds)
 const vehicles       = new Map(); // callsign -> { vehicleId, lat, lon, ts, status, autocabId, Id, registration, plateNumber }
 const events         = [];        // [{ type, vehicleId, callsign, status, geofenceId, geofenceName, ts, autocabId, Id, Vehicle, ... }]
+const lastStatusByCallsign = new Map(); // callsign -> "Clear" / "Busy" / etc.
 
 // --- Vehicle directory from Autocab (callsign → Autocab id) ---
 /**
@@ -209,7 +210,8 @@ async function processVehiclePing(vehicleId, lat, lon, ts, status, meta = {}) {
   if (typeof lat !== 'number' || typeof lon !== 'number') return;
 
   const timestamp   = ts || new Date().toISOString();
-  const cleanStatus = status || 'Unknown';
+  const cached = lastStatusByCallsign.get(String(vehicleId));
+  const cleanStatus = (status && String(status).trim()) || cached || 'Unknown';
 
   // Normalise Autocab numeric Id (vehicleId used by Autocab APIs)
   const autoId =
@@ -653,8 +655,82 @@ async function handleHackneyLocation(req, res) {
 app.post(/(HackneyLocation|VehiclePosition|VehicleTracksChanged)/i, handleHackneyLocation);
 
 // Acknowledge other Autocab event hooks we don't process (prevents retries/noise)
-app.post(/(BookingComplete|BookingCreated|Dispatched|shift)/i, (req, res) => {
+app.post(/(BookingComplete|BookingCreated|Dispatched)/i, (req, res) => {
   res.json({ ok: true });
+});
+
+app.post(/shift/i, async (req, res) => {
+  try {
+    const norm = normaliseWebhookBody(req.body);
+    const body = norm.body;
+
+    if (typeof body === 'string') {
+      return res.json({ ok: true, ignored: true });
+    }
+
+    const items = Array.isArray(body) ? body : [body];
+
+    // We will resolve VehicleAutoID -> callsign using a reverse lookup.
+    // So we need a reverse map by id.
+    await refreshVehicleDirectory(false);
+
+    // Build reverse lookup: autocabId -> callsign
+    const vehicleDirectoryById = new Map();
+    for (const [cs, entry] of vehicleDirectory.entries()) {
+      if (entry && typeof entry.id === 'number') {
+        vehicleDirectoryById.set(entry.id, cs);
+      }
+    }
+
+    let updated = 0;
+
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+
+      const autocabId =
+        (typeof it.VehicleAutoID === 'number' && it.VehicleAutoID) ||
+        (typeof it.VehicleId === 'number' && it.VehicleId) ||
+        (typeof it.VehicleID === 'number' && it.VehicleID) ||
+        (typeof it.AutocabId === 'number' && it.AutocabId) ||
+        null;
+
+      const status =
+        it.VehicleStatus ||
+        it.vehicleStatus ||
+        it.Status ||
+        it.status ||
+        it.ShiftStatus ||
+        it.shiftStatus ||
+        it.State ||
+        it.state ||
+        null;
+
+      if (!status) continue;
+
+      let callsign = String(it.Callsign || it.callSign || it.callsign || '').trim();
+      if (!callsign && autocabId) {
+        const resolved = vehicleDirectoryById.get(autocabId);
+        if (resolved) callsign = resolved;
+      }
+
+      if (!callsign) continue;
+
+      lastStatusByCallsign.set(String(callsign), String(status));
+      updated++;
+
+      // Also update live vehicle record if we already have it
+      const vr = vehicles.get(String(callsign));
+      if (vr) {
+        vr.status = String(status);
+        vehicles.set(String(callsign), vr);
+      }
+    }
+
+    return res.json({ ok: true, updated });
+  } catch (err) {
+    console.error('Error in /shift handler:', err);
+    return res.status(500).json({ error: 'shift handler failed' });
+  }
 });
 
 // --- Events for frontend (ENTER / EXIT feed) ---

@@ -154,22 +154,25 @@ async function refreshVehicleDirectory(force = false) {
   }
 
   const nextMap = new Map();
+const nextById = new Map();
 
-  (data || []).forEach(v => {
-    if (!v) return;
-    if (v.isActive === false) return; // optional filter
-    const cs = normaliseCallsign(v.callsign || v.Callsign || v.callSign);
-    if (!cs) return;
+(data || []).forEach(v => {
+  if (!v) return;
+  if (v.isActive === false) return;
 
-    nextMap.set(cs, {
-      id: v.id,           // Autocab vehicleId
-      callsign: cs,
-      raw: v
-    });
-  });
+  const cs = normaliseCallsign(v.callsign || v.Callsign || v.callSign);
+  if (!cs) return;
 
-  vehicleDirectory   = nextMap;
-  lastVehicleRefresh = now;
+  const id = v.id;
+  if (typeof id !== 'number') return;
+
+  nextMap.set(cs, { id, callsign: cs, raw: v });
+  nextById.set(id, cs);
+});
+
+vehicleDirectory = nextMap;
+vehicleDirectoryById = nextById;
+
 
   console.log(
     `[Vehicles] Directory updated – ${vehicleDirectory.size} active vehicles loaded`
@@ -544,129 +547,83 @@ async function handleHackneyLocation(req, res) {
 
     console.log('HackneyLocation payload on path', req.path);
     console.log('Webhook content-type:', req.headers['content-type']);
-    console.log(
-      'Webhook parsed:',
-      norm.parsed,
-      'type:',
-      Array.isArray(body) ? 'array' : typeof body
-    );
+    console.log('Webhook parsed:', norm.parsed, 'type:', Array.isArray(body) ? 'array' : typeof body);
 
-    // If it's still a string at this point, log a short preview and exit quickly
     if (typeof body === 'string') {
       console.log('ℹ️ Webhook body is non-location string:', body.slice(0, 200));
       return res.json({ ok: true, ignored: true, reason: 'string-body' });
     }
 
-    // Extract VehicleTrack-like objects from any known shape
-    function extractTracks(payload) {
-      if (!payload) return null;
-
-      // Shape A: { EventType, VehicleTracks: [...] }
-      if (Array.isArray(payload.VehicleTracks)) return payload.VehicleTracks;
-
-      // Shape B: top-level array
-      if (Array.isArray(payload)) {
-        const out = [];
-
-        for (const item of payload) {
-          if (!item) continue;
-
-          // B1: array of envelopes: [{ EventType, VehicleTracks:[...] }, ...]
-          if (Array.isArray(item.VehicleTracks)) {
-            out.push(...item.VehicleTracks);
-            continue;
-          }
-
-          // B2: array of raw tracks: [{ Vehicle, CurrentLocation }, ...]
-          if (typeof item === 'object' && (item.Vehicle || item.CurrentLocation || item.Location || item.location)) {
-            out.push(item);
-            continue;
-          }
-        }
-
-        return out.length ? out : null;
-      }
-
-      // Shape C: single object with Vehicle/CurrentLocation/Location
-      if (
-        typeof payload === 'object' &&
-        (payload.Vehicle || payload.CurrentLocation || payload.Location || payload.location)
-      ) {
-        return [payload];
-      }
-
-      return null;
-    }
-
-    const tracks = extractTracks(body);
+    // Normalise into track list
+    let tracks = null;
+    if (body && Array.isArray(body.VehicleTracks)) tracks = body.VehicleTracks;
+    else if (Array.isArray(body)) tracks = body;
+    else if (body && typeof body === 'object') tracks = [body];
 
     if (!tracks || !tracks.length) {
-      const keys =
-        (body && typeof body === 'object' && !Array.isArray(body))
-          ? Object.keys(body)
-          : [];
-      console.log('ℹ️ Ignoring location webhook payload (no usable VehicleTracks/array/object)', {
-        path: req.path,
-        keys,
-        EventType: body && (body.EventType || body.eventType) ? (body.EventType || body.eventType) : null
-      });
+      const keys = (body && typeof body === 'object') ? Object.keys(body) : [];
+      console.log('ℹ️ Ignoring location webhook payload (no tracks)', { path: req.path, keys });
       return res.json({ ok: true, ignored: true, reason: 'no-tracks' });
     }
 
     console.log(`Processing ${tracks.length} track items`);
-    if (tracks[0] && typeof tracks[0] === 'object') {
-      console.log('Sample track keys:', Object.keys(tracks[0]));
+
+    // Ensure we can resolve VehicleAutoID -> callsign
+    await refreshVehicleDirectory(false);
+
+    // Helpful once-per-request debug
+    const first = tracks[0];
+    if (first && typeof first === 'object') {
+      console.log('Sample track keys:', Object.keys(first));
     }
 
     const ops = tracks.map((t) => {
       if (!t || typeof t !== 'object') return null;
 
-      // Some payloads are nested, some are flatter
-      const v = t.Vehicle || t.vehicle || {};
-      const loc =
-        t.CurrentLocation ||
-        t.currentLocation ||
-        t.Location ||
-        t.location ||
-        {};
+      // This webhook shape uses VehicleAutoID
+      const autocabId =
+        (typeof t.VehicleAutoID === 'number' && t.VehicleAutoID) ||
+        (typeof t.VehicleId === 'number' && t.VehicleId) ||
+        (typeof t.VehicleID === 'number' && t.VehicleID) ||
+        (typeof t.AutocabId === 'number' && t.AutocabId) ||
+        null;
 
-      // Callsign string used as primary vehicleId in our UI
-      const callsign = String(
-        t.vehicleId || t.VehicleId || t.callSign || t.Callsign ||
-        v.Callsign || v.callsign || v.callSign ||
-        v.Registration || v.registration ||
-        v.PlateNumber || v.plateNumber ||
-        ''
-      ).trim();
-
+      // Lat/lon are commonly under Position or Location
+      const pos = t.Position || t.Location || t.CurrentLocation || {};
       const lat = parseFloat(
-        loc.Latitude ?? loc.latitude ?? t.Latitude ?? t.latitude ?? t.lat
+        pos.Latitude ?? pos.latitude ?? pos.Lat ?? pos.lat ?? pos.Y ?? t.Latitude ?? t.latitude ?? t.lat
       );
       const lon = parseFloat(
-        loc.Longitude ?? loc.longitude ?? t.Longitude ?? t.longitude ?? t.lon ?? t.lng
+        pos.Longitude ?? pos.longitude ?? pos.Lng ?? pos.lng ?? pos.Lon ?? pos.lon ?? pos.X ?? t.Longitude ?? t.longitude ?? t.lon ?? t.lng
       );
 
+      // Callsign may not exist in payload; resolve from directory by autocabId
+      let callsign = String(
+        t.Callsign || t.callSign || t.callsign || ''
+      ).trim();
+
+      if (!callsign && autocabId && vehicleDirectoryById) {
+        const resolved = vehicleDirectoryById.get(autocabId);
+        if (resolved) callsign = resolved;
+      }
+
+      // If we STILL have no callsign, fall back to autocabId string to at least populate /api/vehicles
+      if (!callsign && autocabId) {
+        callsign = String(autocabId);
+      }
+
       const ts =
+        t.Received ||
         t.Timestamp ||
         t.timestamp ||
-        (body && body.Timestamp) ||
-        (body && body.timestamp) ||
+        (body && (body.Received || body.Timestamp || body.timestamp)) ||
         new Date().toISOString();
 
       const status =
         t.VehicleStatus ||
         t.vehicleStatus ||
-        (body && body.VehicleStatus) ||
-        (body && body.vehicleStatus) ||
+        (body && (body.VehicleStatus || body.vehicleStatus)) ||
         'Unknown';
-
-      // Try multiple places for Autocab vehicle Id (numeric)
-      const autocabId =
-        (typeof v.Id === 'number' && v.Id) ||
-        (typeof v.VehicleId === 'number' && v.VehicleId) ||
-        (typeof t.VehicleId === 'number' && t.VehicleId) ||
-        (typeof t.AutocabId === 'number' && t.AutocabId) ||
-        null;
 
       if (!callsign || Number.isNaN(lat) || Number.isNaN(lon)) {
         return null;
@@ -675,15 +632,17 @@ async function handleHackneyLocation(req, res) {
       const meta = {
         autocabId,
         Id: autocabId,
-        registration: v.Registration || v.registration || null,
-        plateNumber: v.PlateNumber || v.plateNumber || null
+        registration: null,
+        plateNumber: null
       };
 
       return processVehiclePing(callsign, lat, lon, ts, status, meta);
     });
 
-    await Promise.all(ops.filter(Boolean));
-    return res.json({ ok: true, processed: tracks.length });
+    const results = await Promise.all(ops.filter(Boolean));
+    const processed = results.length;
+
+    return res.json({ ok: true, processed, received: tracks.length });
   } catch (err) {
     console.error('Error in HackneyLocation handler:', err);
     return res.status(500).json({ error: 'HackneyLocation failed' });

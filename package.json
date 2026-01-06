@@ -1,0 +1,16 @@
+{
+  "name": "geofence-mongo-demo",
+  "version": "1.0.0",
+  "description": "Minimal geofence demo using Leaflet + MongoDB + Turf.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@turf/turf": "^6.5.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mongoose": "^8.8.0",
+    "node-fetch": "^3.3.2"
+  }
+}

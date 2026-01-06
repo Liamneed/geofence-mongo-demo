@@ -1,0 +1,2569 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Geofence Demo — Zones & Alerts</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet.draw CSS via cdnjs (SRI removed so browser doesn't block it) -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"
+  />
+  <style>
+    :root {
+      --bg: #050505;
+      --accent: #ffd000;
+      --panel: #020617;
+      --text: #f8f8f8;
+      --muted: #9ca3af;
+      --radius: 12px;
+      --border: rgba(148,163,184,0.35);
+      --enter: #22c55e;
+      --exit: #f97316;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #map {
+      flex: 1 1 auto;
+      min-height: 40vh;
+    }
+
+    .autobusy-overlay {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      align-items: flex-end;
+    }
+    .autobusy-card {
+      background: rgba(15,23,42,0.96);
+      border-radius: 12px;
+      border: 1px solid rgba(31,41,55,1);
+      padding: 10px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+      pointer-events: auto;
+      min-width: 260px;
+      max-width: 340px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.55);
+    }
+    .autobusy-card h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text);
+    }
+    .autobusy-modes {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .autobusy-mode-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .autobusy-mode-option input {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .autobusy-hint {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .autobusy-log-list {
+      max-height: 170px;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      border-top: 1px solid rgba(148,163,184,0.4);
+      margin-top: 6px;
+      padding-top: 6px;
+    }
+    .autobusy-log-entry {
+      border-bottom: 1px solid rgba(31,41,55,0.9);
+      padding: 4px 0;
+    }
+    .autobusy-log-entry:last-child {
+      border-bottom: none;
+    }
+    .autobusy-log-entry.ok {
+      color: #22c55e;
+    }
+    .autobusy-log-entry.error {
+      color: #f97316;
+    }
+    .autobusy-log-entry.dry-run {
+      color: var(--muted);
+    }
+    .autobusy-log-entry .meta {
+      color: #9ca3af;
+    }
+
+    .timer-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      margin-top: 4px;
+      margin-bottom: 6px;
+    }
+    .timer-label span {
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .timer-input {
+      width: 80px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(75,85,99,0.9);
+      background: rgba(15,23,42,0.98);
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+    .timer-input:focus {
+      border-color: var(--accent);
+    }
+
+    .zone-timer-list {
+      margin-top: 6px;
+      max-height: 130px;
+      overflow-y: auto;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .zone-timer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 3px 6px;
+      border-radius: 6px;
+      background: rgba(15,23,42,0.98);
+      border: 1px solid rgba(55,65,81,0.9);
+    }
+    .zone-timer-row span.name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .zone-timer-row span.clock {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .zone-timer-empty {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 2px 0;
+    }
+
+    .zone-timer-overrides {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .zone-timer-overrides ul {
+      margin: 2px 0 0;
+      padding-left: 16px;
+    }
+    .zone-timer-overrides li {
+      margin: 1px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .zone-timer-overrides .override-label {
+      flex: 1 1 auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .zone-timer-overrides .override-remove {
+      border: none;
+      background: rgba(31,41,55,1);
+      color: #f97316;
+      border-radius: 999px;
+      font-size: 10px;
+      padding: 0 6px 1px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .bottom-panel {
+      flex: 0 0 260px;
+      background: radial-gradient(circle at top, #020617 0%, #020617 40%, #020617 100%);
+      border-top: 1px solid var(--border);
+      padding: 8px 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .bottom-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+
+    .badge-online {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(74,222,128,0.4);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badge-online span.dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #22c55e;
+      box-shadow: 0 0 10px #22c55e;
+    }
+
+    .summary-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .summary-text {
+      font-size: 13px;
+      color: var(--muted);
+      flex: 1;
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .settings-badge {
+      border: 1px solid rgba(148,163,184,0.7);
+      background: rgba(15,23,42,0.98);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      cursor: default;
+    }
+    .settings-badge.off {
+      opacity: 0.7;
+    }
+    .settings-badge.live {
+      border-color: #22c55e;
+      color: #22c55e;
+    }
+    .settings-badge.dry-run {
+      border-color: #f97316;
+      color: #f97316;
+    }
+
+    .bottom-grid {
+      flex: 1 1 auto;
+      display: grid;
+      /* Now 4 columns: Zones | Vehicles | Events | AutoBusy */
+      grid-template-columns: 1.2fr 1.2fr 1.1fr 1.3fr;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    .bottom-col {
+      background: rgba(15,23,42,0.96);
+      border-radius: var(--radius);
+      border: 1px solid rgba(31,41,55,1);
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .col-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    /* Tiny metrics in Events header */
+    .col-metrics {
+      font-size: 10px;
+      color: var(--muted);
+      opacity: 0.9;
+      white-space: nowrap;
+    }
+
+    .zone-list,
+    .event-list {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      margin-top: 2px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .event-list {
+      max-height: 140px;
+      padding-right: 4px;
+    }
+
+    .zone-row,
+    .event-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      padding: 3px 5px;
+      border-radius: 6px;
+      background: rgba(15,23,42,0.98);
+      border: 1px solid rgba(55,65,81,0.9);
+      font-size: 12px;
+    }
+
+    .zone-row span.name,
+    .event-row span.name {
+      font-size: 12px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+
+    .zone-row small,
+    .event-row small {
+      font-size: 11px;
+      color: var(--muted);
+      display: block;
+    }
+
+    .zone-actions {
+      display: flex;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .zone-btn {
+      border: none;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      background: rgba(31,41,55,1);
+      color: var(--accent);
+    }
+    .zone-btn.delete {
+      color: #f97316;
+    }
+
+    .event-type {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 999px;
+      margin-right: 4px;
+      display: inline-block;
+    }
+    .event-type.enter {
+      color: var(--enter);
+      border: 1px solid var(--enter);
+    }
+    .event-type.exit {
+      color: var(--exit);
+      border: 1px solid var(--exit);
+    }
+    .event-type.auto {
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    .status-chip {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 4px;
+      border-radius: 999px;
+      margin-left: 4px;
+      border: 1px solid rgba(148,163,184,0.8);
+    }
+    .status-chip--clear {
+      color: var(--enter);
+      border-color: var(--enter);
+    }
+    .status-chip--busy {
+      color: #f97316;
+      border-color: #f97316;
+    }
+
+    .leaflet-container {
+      background: #020617;
+    }
+
+    .vehicle-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 2px solid #22c55e;
+      background: rgba(0,0,0,0.98);
+      font-size: 14px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      text-shadow: 0 0 4px rgba(0,0,0,0.9);
+      box-shadow: 0 0 8px rgba(0,0,0,1);
+      min-width: 28px;
+      transform-origin: center center;
+      transition: transform 0.08s linear;
+    }
+    .vehicle-pill.green {
+      border-color: #22c55e;
+      color: #22c55e;
+      box-shadow: 0 0 10px #22c55e77;
+    }
+    .vehicle-pill.red {
+      border-color: #ef4444;
+      color: #ef4444;
+      box-shadow: 0 0 10px #ef4444aa;
+    }
+
+    .hackney-toggle-label {
+      font-size: 12px;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 34px;
+      height: 18px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #020617;
+      border-radius: 999px;
+      border: 1px solid rgba(75,85,99,1);
+      transition: 0.18s ease;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 3px;
+      bottom: 2px;
+      background: #6b7280;
+      border-radius: 50%;
+      transition: 0.18s ease;
+    }
+    .switch input:checked + .slider {
+      background: rgba(34,197,94,0.15);
+      border-color: #22c55e;
+    }
+    .switch input:checked + .slider:before {
+      transform: translateX(14px);
+      background: #22c55e;
+    }
+
+    .form-helper {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    .form-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .form-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+    }
+
+    .vehicle-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .vehicle-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .vehicle-search {
+      flex: 1 1 auto;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(75,85,99,0.9);
+      background: rgba(10,16,24,0.98);
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+    .vehicle-search:focus {
+      border-color: var(--accent);
+    }
+
+    .vehicle-toolbar-btn {
+      border: none;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      cursor: pointer;
+      background: rgba(31,41,55,1);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .vehicle-toolbar-btn:hover {
+      background: rgba(55,65,81,1);
+    }
+
+    .vehicle-visual-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .vehicle-visual-toggles .hackney-toggle-label {
+      font-size: 11px;
+    }
+
+    .vehicle-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: 140px;
+      overflow-y: auto;
+      border-radius: 8px;
+      border: 1px solid rgba(31,41,55,1);
+      padding: 4px 6px;
+      background: rgba(15,23,42,0.98);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 4px;
+    }
+
+    .vehicle-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 4px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .vehicle-row:hover {
+      background: rgba(31,41,55,0.9);
+    }
+    .vehicle-row input[type="checkbox"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .vehicle-row span {
+      flex: 1 1 auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .vehicle-empty {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 2px;
+    }
+
+    .event-filters {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .event-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .event-filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(55,65,81,1);
+      background: rgba(15,23,42,0.98);
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .event-filter-chip input {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .event-search {
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(75,85,99,0.9);
+      background: rgba(10,16,24,0.98);
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      width: 100%;
+    }
+    .event-search:focus {
+      border-color: var(--accent);
+    }
+
+    /* Message text inputs */
+    .msg-text-input {
+      width: 100%;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(75,85,99,0.9);
+      background: rgba(10,16,24,0.98);
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+    .msg-text-input:focus {
+      border-color: var(--accent);
+    }
+
+    /* Small helper section styling */
+    .event-subpanel {
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(31,41,55,0.85);
+    }
+    .event-subpanel-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 4px;
+    }
+
+    @media (max-width: 960px) {
+      .bottom-grid {
+        grid-template-columns: 1fr;
+        height: 260px;
+      }
+      .bottom-panel {
+        flex: 0 0 320px;
+      }
+      .autobusy-overlay {
+        top: 10px;
+        right: 10px;
+        left: auto;
+        align-items: flex-end;
+      }
+      .col-metrics {
+        width: 100%;
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Overlay now only contains AutoBusy Mode card and message settings -->
+  <div class="autobusy-overlay">
+    <div class="autobusy-card">
+      <h3>AutoBusy Mode</h3>
+      <div class="autobusy-modes">
+        <label class="autobusy-mode-option">
+          <input type="radio" name="autoBusyMode" value="off" checked />
+          OFF
+        </label>
+        <label class="autobusy-mode-option">
+          <input type="radio" name="autoBusyMode" value="dry-run" />
+          DRY-RUN
+        </label>
+        <label class="autobusy-mode-option">
+          <input type="radio" name="autoBusyMode" value="live" />
+          LIVE
+        </label>
+      </div>
+      <p class="autobusy-hint">
+        Only EXIT events from <strong>Station</strong> zones (e.g. “Train Station”) will trigger Busy.
+      </p>
+
+      <!-- per-trigger message toggles -->
+      <div class="form-row" style="margin-top:6px;">
+        <label class="hackney-toggle-label">
+          <span>Send AutoPob message on AutoBusy</span>
+          <span class="switch">
+            <input type="checkbox" id="msg-toggle-autopob" checked />
+            <span class="slider"></span>
+          </span>
+        </label>
+        <label class="hackney-toggle-label">
+          <span>Send Clear message when timer expires</span>
+          <span class="switch">
+            <input type="checkbox" id="msg-toggle-timer" checked />
+            <span class="slider"></span>
+          </span>
+        </label>
+      </div>
+
+      <!-- Editable message texts -->
+      <div class="form-row" style="margin-top:6px;">
+        <label class="form-label">AutoBusy message</label>
+        <input
+          id="msg-text-autobusy"
+          class="msg-text-input"
+          type="text"
+          value="AutoPob Activated"
+        />
+      </div>
+      <div class="form-row" style="margin-top:4px;">
+        <label class="form-label">Timer expiry message</label>
+        <input
+          id="msg-text-timer"
+          class="msg-text-input"
+          type="text"
+          value="Clear Timer Expired"
+        />
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-panel">
+    <div class="bottom-header">
+      <div class="badge-online">
+        <span class="dot"></span>
+        <span>Geofence engine online</span>
+      </div>
+      <div class="summary-right">
+        <div class="summary-text" id="summary-text">
+          Showing 0 vehicles · AutoBusy: OFF · Last AutoBusy: none
+        </div>
+        <button
+          type="button"
+          id="settings-badge"
+          class="settings-badge off"
+          title=""
+        >
+          Settings · OFF
+        </button>
+      </div>
+    </div>
+
+    <div class="bottom-grid">
+      <!-- Zones column -->
+      <div class="bottom-col">
+        <p class="col-title">Zones</p>
+        <div id="zone-list" class="zone-list"></div>
+      </div>
+
+      <!-- Vehicles column -->
+      <div class="bottom-col">
+        <p class="col-title">Vehicles</p>
+        <div class="form-row">
+          <div class="vehicle-header-row">
+            <span class="form-label">Vehicle selection</span>
+            <label class="hackney-toggle-label">
+              <span>Only show 900-series (900–999)</span>
+              <span class="switch">
+                <input type="checkbox" id="hackney-only" />
+                <span class="slider"></span>
+              </span>
+            </label>
+          </div>
+
+          <div class="vehicle-toolbar">
+            <input
+              id="vehicle-search"
+              class="vehicle-search"
+              type="text"
+              placeholder="Search vehicles (e.g. 923)"
+              autocomplete="off"
+            />
+            <button type="button" id="vehicle-select-all" class="vehicle-toolbar-btn">All</button>
+            <button type="button" id="vehicle-select-none" class="vehicle-toolbar-btn">None</button>
+          </div>
+
+          <!-- NEW: heatmap & trails toggles -->
+          <div class="vehicle-visual-toggles">
+            <label class="hackney-toggle-label">
+              <span>Heatmap</span>
+              <span class="switch">
+                <input type="checkbox" id="toggle-heatmap" />
+                <span class="slider"></span>
+              </span>
+            </label>
+            <label class="hackney-toggle-label">
+              <span>Trails</span>
+              <span class="switch">
+                <input type="checkbox" id="toggle-trails" />
+                <span class="slider"></span>
+              </span>
+            </label>
+          </div>
+
+          <div id="vehicle-list" class="vehicle-list"></div>
+
+          <p class="form-helper">
+            Use the search box to filter, then click vehicles to include or exclude them. “All” and “None” apply to every vehicle.
+          </p>
+        </div>
+      </div>
+
+      <!-- Events column (events only now) -->
+      <div class="bottom-col">
+        <p class="col-title">
+          <span>Events</span>
+          <span class="col-metrics">
+            <span id="events-count">0</span> recent ·
+            <span id="timers-count">0</span> timers ·
+            <span id="autobusy-count">0</span> AutoBusy
+          </span>
+        </p>
+
+        <div class="event-filters">
+          <div class="event-filter-row">
+            <label class="event-filter-chip">
+              <input type="checkbox" id="filter-enter" checked />
+              ENTER
+            </label>
+            <label class="event-filter-chip">
+              <input type="checkbox" id="filter-exit" checked />
+              EXIT
+            </label>
+            <label class="event-filter-chip">
+              <input type="checkbox" id="filter-auto" checked />
+              AUTO
+            </label>
+          </div>
+          <input
+            id="event-search"
+            class="event-search"
+            type="text"
+            placeholder="Filter by callsign or zone…"
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- Recent ENTER/EXIT/AUTO events -->
+        <div id="event-list" class="event-list"></div>
+      </div>
+
+      <!-- NEW: dedicated AutoBusy & Timers column -->
+      <div class="bottom-col">
+        <p class="col-title">
+          <span>AutoBusy & Timers</span>
+        </p>
+
+        <!-- AutoBusy log -->
+        <div class="event-subpanel">
+          <p class="event-subpanel-title">AutoBusy Log</p>
+          <div id="busy-log-list" class="autobusy-log-list"></div>
+        </div>
+
+        <!-- Zone countdown -->
+        <div class="event-subpanel">
+          <p class="event-subpanel-title">Zone Countdown</p>
+          <label class="timer-label">
+            <span>Duration (minutes)</span>
+            <input
+              type="number"
+              id="zone-timer-minutes"
+              class="timer-input"
+              min="1"
+              max="120"
+              step="1"
+              value="1"
+            />
+          </label>
+          <p class="autobusy-hint">
+            When a vehicle ENTERS any zone, a per-vehicle countdown will start with this duration.
+            Use “Timer” in the Zones panel to override specific zones.
+          </p>
+          <div id="zone-timer-overrides" class="zone-timer-overrides"></div>
+          <div id="zone-timer-list" class="zone-timer-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet.draw JS via cdnjs (SRI removed so it isn't blocked) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <!-- NEW: Leaflet.heat for heatmap -->
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+  <script>
+    const map = L.map('map').setView([50.3755, -4.1427], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    const drawnItems = new L.FeatureGroup().addTo(map);
+
+    const zoneList        = document.getElementById('zone-list');
+    const eventList       = document.getElementById('event-list');
+    const hackneyOnlyEl   = document.getElementById('hackney-only');
+    const vehicleSearchEl = document.getElementById('vehicle-search');
+    const vehicleListEl   = document.getElementById('vehicle-list');
+    const vehicleAllBtn   = document.getElementById('vehicle-select-all');
+    const vehicleNoneBtn  = document.getElementById('vehicle-select-none');
+    const summaryTextEl   = document.getElementById('summary-text');
+    const busyLogListEl   = document.getElementById('busy-log-list');
+    const modeRadios      = document.querySelectorAll('input[name="autoBusyMode"]');
+
+    const filterEnterEl   = document.getElementById('filter-enter');
+    const filterExitEl    = document.getElementById('filter-exit');
+    const filterAutoEl    = document.getElementById('filter-auto');
+    const eventSearchEl   = document.getElementById('event-search');
+
+    const zoneTimerMinutesEl   = document.getElementById('zone-timer-minutes');
+    const zoneTimerListEl      = document.getElementById('zone-timer-list');
+    const zoneTimerOverridesEl = document.getElementById('zone-timer-overrides');
+
+    const msgToggleAutopobEl = document.getElementById('msg-toggle-autopob');
+    const msgToggleTimerEl   = document.getElementById('msg-toggle-timer');
+    const msgTextAutobusyEl  = document.getElementById('msg-text-autobusy');
+    const msgTextTimerEl     = document.getElementById('msg-text-timer');
+
+    const settingsBadgeEl = document.getElementById('settings-badge');
+
+    // NEW: small counters in Events header
+    const eventsCountEl   = document.getElementById('events-count');
+    const timersCountEl   = document.getElementById('timers-count');
+    const autobusyCountEl = document.getElementById('autobusy-count');
+
+    // NEW: heatmap & trails toggles
+    const heatToggleEl   = document.getElementById('toggle-heatmap');
+    const trailsToggleEl = document.getElementById('toggle-trails');
+
+    const vehicleMarkers  = {};
+    const BASE_ZOOM       = 13;
+    const STATUS_API_URL  = '/api/set-busy';
+    const SETTINGS_API_URL = '/api/settings';
+    let settingsSaveTimeout = null;
+
+    let statusUpdateMode   = 'off';
+    const processedExitEvents = new Set();
+    const autoBusyMap      = new Map();
+    const busyLog          = [];
+    let lastAutoBusyText   = 'none';
+
+    let filter900Only       = false;
+    let allVehicleIds       = new Set();
+    let activeVehicleIds    = null;
+    let currentVisibleCount = 0;
+
+    let eventsEpoch = 0;
+    let eventsCache = [];
+
+    let showEnter = true;
+    let showExit  = true;
+    let showAuto  = true;
+    let eventSearchTerm = '';
+
+    const zoneTimers = new Map();
+    const completedTimers = new Set(); // ensure timer messages send only once per key
+    let zoneTimerMinutesDefault = 1;
+
+    // Per-zone overrides (key = zoneName.toLowerCase())
+    let zoneTimerOverrides = new Map(); // key -> { label, minutes }
+
+    const zoneLayerGroups = new Map();
+    let currentEditingZoneId = null;
+    const zoneEditToolbars = new Map();
+
+    // Track last ENTER/EXIT state per (callsign, zoneId or zoneName)
+    const lastZoneState = new Map(); // key: `${callsign}|${zoneId || zoneName}` -> 'ENTER' | 'EXIT'
+
+    // Per-trigger message enable flags
+    let autoBusyMsgEnabled = true;
+    let timerMsgEnabled    = true;
+
+    // Editable message texts
+    let autoBusyMsgText = 'AutoPob Activated';
+    let timerMsgText    = 'Clear Timer Expired';
+
+    // NEW: heatmap & trails state
+    let heatmapEnabled = false;
+    let trailsEnabled  = false;
+    let heatLayer = null;
+    const HEAT_HISTORY_MS = 5 * 60 * 1000;     // 5 min of positions
+    const TRAIL_HISTORY_MS = 10 * 60 * 1000;   // 10 min of trails
+    const TRAIL_MAX_POINTS = 60;
+
+    let heatPoints = []; // {lat, lon, ts}
+    const vehicleTrailPoints = {}; // id -> [{lat, lon, ts}]
+    const vehicleTrails      = {}; // id -> L.polyline
+
+    let hasDraw = false;
+    try {
+      hasDraw = !!(L && L.Control && L.Control.Draw);
+      console.log('Leaflet.draw detected?', hasDraw, L.Control && Object.keys(L.Control));
+    } catch (e) {
+      hasDraw = false;
+    }
+
+    if (!hasDraw) {
+      console.warn('Leaflet.draw not available – drawing tools disabled, but geofences will still display.');
+    }
+
+    // ---------- HEATMAP & TRAILS HELPERS ----------
+
+    function trackVehiclePositionForVisuals(id, lat, lon) {
+      const now = Date.now();
+
+      // Track heat points
+      heatPoints.push({ lat, lon, ts: now });
+
+      // Track per-vehicle trails
+      if (!vehicleTrailPoints[id]) {
+        vehicleTrailPoints[id] = [];
+      }
+      vehicleTrailPoints[id].push({ lat, lon, ts: now });
+      if (vehicleTrailPoints[id].length > TRAIL_MAX_POINTS) {
+        vehicleTrailPoints[id].shift();
+      }
+    }
+
+    function updateHeatLayer() {
+      if (!heatmapEnabled) {
+        if (heatLayer) {
+          map.removeLayer(heatLayer);
+          heatLayer = null;
+        }
+        return;
+      }
+      const cutoff = Date.now() - HEAT_HISTORY_MS;
+      const pts = heatPoints
+        .filter(p => p.ts >= cutoff)
+        .map(p => [p.lat, p.lon, 0.6]);
+
+      if (!heatLayer) {
+        heatLayer = L.heatLayer(pts, {
+          radius: 25,
+          blur: 15,
+          maxZoom: 18
+        }).addTo(map);
+      } else {
+        heatLayer.setLatLngs(pts);
+      }
+    }
+
+    function updateTrailsLayer(seenSet) {
+      if (!trailsEnabled) {
+        // Remove all trail polylines
+        Object.keys(vehicleTrails).forEach(id => {
+          map.removeLayer(vehicleTrails[id]);
+          delete vehicleTrails[id];
+        });
+        return;
+      }
+
+      const now = Date.now();
+      Object.keys(vehicleTrailPoints).forEach(id => {
+        const ptsRaw = vehicleTrailPoints[id] || [];
+        const latlngs = ptsRaw
+          .filter(p => p.ts >= now - TRAIL_HISTORY_MS)
+          .map(p => [p.lat, p.lon]);
+
+        if (!latlngs.length || !seenSet.has(id)) {
+          if (vehicleTrails[id]) {
+            map.removeLayer(vehicleTrails[id]);
+            delete vehicleTrails[id];
+          }
+          return;
+        }
+
+        if (!vehicleTrails[id]) {
+          vehicleTrails[id] = L.polyline(latlngs, {
+            weight: 2,
+            opacity: 0.7,
+            color: '#38bdf8'
+          }).addTo(map);
+        } else {
+          vehicleTrails[id].setLatLngs(latlngs);
+        }
+      });
+
+      // Remove trails for ids that no longer have points
+      Object.keys(vehicleTrails).forEach(id => {
+        if (!vehicleTrailPoints[id]) {
+          map.removeLayer(vehicleTrails[id]);
+          delete vehicleTrails[id];
+        }
+      });
+    }
+
+    // Heatmap & trails toggle listeners
+    if (heatToggleEl) {
+      heatToggleEl.addEventListener('change', () => {
+        heatmapEnabled = heatToggleEl.checked;
+        updateHeatLayer();
+      });
+    }
+    if (trailsToggleEl) {
+      trailsToggleEl.addEventListener('change', () => {
+        trailsEnabled = trailsToggleEl.checked;
+        if (!trailsEnabled) {
+          updateTrailsLayer(new Set()); // clears everything
+        } else {
+          // Rebuild immediately using current markers
+          const seenNow = new Set(Object.keys(vehicleMarkers));
+          updateTrailsLayer(seenNow);
+        }
+      });
+    }
+
+    // ---------- ZONE OVERRIDES RENDERING ----------
+
+    function renderZoneOverrides() {
+      if (!zoneTimerOverridesEl) return;
+      if (!zoneTimerOverrides.size) {
+        zoneTimerOverridesEl.textContent =
+          'No per-zone overrides set. Click “Timer” on a zone to override its countdown.';
+        return;
+      }
+      const items = Array.from(zoneTimerOverrides.entries()).sort((a, b) =>
+        a[1].label.localeCompare(b[1].label)
+      );
+      let html = '<strong>Per-zone overrides:</strong><ul>';
+      items.forEach(([key, item]) => {
+        html += `
+          <li>
+            <span class="override-label">${item.label} – ${item.minutes} min</span>
+            <button type="button" class="override-remove" data-key="${key}">×</button>
+          </li>`;
+      });
+      html += '</ul>';
+      zoneTimerOverridesEl.innerHTML = html;
+    }
+
+    // Click handler to manually remove overrides (X button)
+    if (zoneTimerOverridesEl) {
+      zoneTimerOverridesEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.override-remove');
+        if (!btn) return;
+        const key = btn.dataset.key;
+        if (!key) return;
+        zoneTimerOverrides.delete(key);
+        renderZoneOverrides();
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+
+    function getTimerDurationForZone(zone) {
+      const key = (zone || '').toString().toLowerCase();
+      if (!key) return zoneTimerMinutesDefault || 0;
+      const entry = zoneTimerOverrides.get(key);
+      if (entry && entry.minutes > 0) return entry.minutes;
+      return zoneTimerMinutesDefault || 0;
+    }
+
+    if (zoneTimerMinutesEl) {
+      const v = parseInt(zoneTimerMinutesEl.value, 10);
+      if (!Number.isNaN(v) && v > 0) {
+        zoneTimerMinutesDefault = v;
+      }
+      zoneTimerMinutesEl.addEventListener('change', () => {
+        let next = parseInt(zoneTimerMinutesEl.value, 10);
+        if (!Number.isFinite(next) || next <= 0) {
+          next = zoneTimerMinutesDefault || 1;
+        }
+        if (next > 120) next = 120;
+        zoneTimerMinutesDefault = next;
+        zoneTimerMinutesEl.value = String(next);
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+
+    // Toggle handlers for per-trigger messaging
+    if (msgToggleAutopobEl) {
+      autoBusyMsgEnabled = msgToggleAutopobEl.checked;
+      msgToggleAutopobEl.addEventListener('change', () => {
+        autoBusyMsgEnabled = msgToggleAutopobEl.checked;
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+    if (msgToggleTimerEl) {
+      timerMsgEnabled = msgToggleTimerEl.checked;
+      msgToggleTimerEl.addEventListener('change', () => {
+        timerMsgEnabled = msgToggleTimerEl.checked;
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+
+    // Message text inputs (now persisted via backend)
+    if (msgTextAutobusyEl) {
+      autoBusyMsgText = msgTextAutobusyEl.value || autoBusyMsgText;
+      msgTextAutobusyEl.addEventListener('input', () => {
+        const val = msgTextAutobusyEl.value || 'AutoPob Activated';
+        autoBusyMsgText = val;
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+    if (msgTextTimerEl) {
+      timerMsgText = msgTextTimerEl.value || timerMsgText;
+      msgTextTimerEl.addEventListener('input', () => {
+        const val = msgTextTimerEl.value || 'Clear Timer Expired';
+        timerMsgText = val;
+        updateSettingsBadge();
+        queueSettingsSave();
+      });
+    }
+
+    function updateSettingsBadge() {
+      if (!settingsBadgeEl) return;
+      const mode = statusUpdateMode || 'off';
+
+      settingsBadgeEl.classList.remove('off', 'live', 'dry-run');
+      if (mode === 'live') {
+        settingsBadgeEl.classList.add('live');
+      } else if (mode === 'dry-run') {
+        settingsBadgeEl.classList.add('dry-run');
+      } else {
+        settingsBadgeEl.classList.add('off');
+      }
+
+      const modeLabel = mode.toUpperCase();
+      const autoLabel = autoBusyMsgEnabled ? `"${autoBusyMsgText}"` : 'OFF';
+      const timerLabel = timerMsgEnabled ? `"${timerMsgText}"` : 'OFF';
+      const overridesCount = zoneTimerOverrides.size;
+      const overridesText = overridesCount
+        ? `${overridesCount} zone override${overridesCount === 1 ? '' : 's'}`
+        : 'no per-zone overrides';
+
+      settingsBadgeEl.textContent = `Settings · ${modeLabel}`;
+      settingsBadgeEl.title =
+        `AutoBusy msg: ${autoLabel}\n` +
+        `Timer msg: ${timerLabel}\n` +
+        `Default countdown: ${zoneTimerMinutesDefault} min\n` +
+        `Overrides: ${overridesText}`;
+    }
+
+    function renderBusyLog() {
+      busyLogListEl.innerHTML = '';
+      const items = [...busyLog].slice().reverse();
+      items.forEach(entry => {
+        const div = document.createElement('div');
+        div.className = `autobusy-log-entry ${entry.result}`;
+        div.innerHTML = `
+          <div><strong>${entry.timeLabel}</strong> · ${entry.callsign} · ${entry.zone}</div>
+          <div class="meta">${entry.mode.toUpperCase()} · ${entry.result.toUpperCase()} · ${entry.message || ''}</div>
+        `;
+        busyLogListEl.appendChild(div);
+      });
+    }
+
+    function updateSummary() {
+      const modeLabel = (statusUpdateMode || 'off').toUpperCase();
+      summaryTextEl.textContent =
+        `Showing ${currentVisibleCount} vehicle${currentVisibleCount === 1 ? '' : 's'} · AutoBusy: ${modeLabel} · Last AutoBusy: ${lastAutoBusyText}`;
+      updateSettingsBadge();
+    }
+
+    function clearZoneTimers() {
+      zoneTimers.clear();
+      lastZoneState.clear();
+      completedTimers.clear();
+      if (zoneTimerListEl) {
+        zoneTimerListEl.innerHTML = '';
+      }
+      updateEventHeaderCounts();
+    }
+
+    function clearAutoBusyHistory() {
+      autoBusyMap.clear();
+      busyLog.length = 0;
+      processedExitEvents.clear();
+      renderBusyLog();
+      lastAutoBusyText = 'none';
+      eventsEpoch = Date.now();
+      eventsCache = [];
+      if (eventList) {
+        eventList.innerHTML = '';
+      }
+      clearZoneTimers();
+      updateSummary();
+      updateEventHeaderCounts();
+    }
+
+    // ---------- SETTINGS <-> SERVER ----------
+
+    function buildSettingsPayload() {
+      const zoneOverridesArray = [];
+      zoneTimerOverrides.forEach((val, key) => {
+        zoneOverridesArray.push({
+          key,
+          label: val.label || key,
+          minutes: val.minutes,
+        });
+      });
+
+      return {
+        mode: statusUpdateMode || 'off',
+        autoBusyMsgEnabled,
+        timerMsgEnabled,
+        autoBusyMsgText,
+        timerMsgText,
+        defaultTimerMinutes: zoneTimerMinutesDefault,
+        zoneOverrides: zoneOverridesArray,
+      };
+    }
+
+    function saveSettingsNow() {
+      const payload = buildSettingsPayload();
+      fetch(SETTINGS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(err => {
+        console.error('Failed to save settings:', err);
+      });
+    }
+
+    function queueSettingsSave() {
+      if (settingsSaveTimeout) clearTimeout(settingsSaveTimeout);
+      settingsSaveTimeout = setTimeout(() => {
+        settingsSaveTimeout = null;
+        saveSettingsNow();
+      }, 400);
+    }
+
+    async function loadSettingsFromServer() {
+      try {
+        const res = await fetch(SETTINGS_API_URL);
+        if (!res.ok) throw new Error('Failed to load settings');
+        const data = await res.json();
+
+        // Mode
+        statusUpdateMode = data.mode || 'off';
+        if (modeRadios && modeRadios.length) {
+          modeRadios.forEach(r => {
+            r.checked = (r.value === statusUpdateMode);
+          });
+        }
+
+        // Toggles
+        if (typeof data.autoBusyMsgEnabled === 'boolean') {
+          autoBusyMsgEnabled = data.autoBusyMsgEnabled;
+        }
+        if (typeof data.timerMsgEnabled === 'boolean') {
+          timerMsgEnabled = data.timerMsgEnabled;
+        }
+        if (msgToggleAutopobEl) msgToggleAutopobEl.checked = !!autoBusyMsgEnabled;
+        if (msgToggleTimerEl)   msgToggleTimerEl.checked   = !!timerMsgEnabled;
+
+        // Message texts
+        autoBusyMsgText = data.autoBusyMsgText || autoBusyMsgText;
+        timerMsgText    = data.timerMsgText    || timerMsgText;
+        if (msgTextAutobusyEl) msgTextAutobusyEl.value = autoBusyMsgText;
+        if (msgTextTimerEl)    msgTextTimerEl.value    = timerMsgText;
+
+        // Default timer
+        zoneTimerMinutesDefault = data.defaultTimerMinutes || zoneTimerMinutesDefault;
+        if (zoneTimerMinutesEl) {
+          zoneTimerMinutesEl.value = String(zoneTimerMinutesDefault);
+        }
+
+        // Per-zone overrides
+        zoneTimerOverrides = new Map();
+        (data.zoneOverrides || []).forEach(ov => {
+          if (!ov || !ov.key) return;
+          const minutes = parseInt(ov.minutes, 10);
+          if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 120) return;
+          zoneTimerOverrides.set(ov.key, {
+            label: ov.label || ov.key,
+            minutes
+          });
+        });
+        renderZoneOverrides();
+        updateSettingsBadge();
+        updateSummary();
+        updateEventHeaderCounts();
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+        updateSettingsBadge();
+        updateEventHeaderCounts();
+      }
+    }
+
+    // ---------- ZONES + DRAW CONTROL ----------
+
+    function addGeofenceToMapAndList(g) {
+      if (!g.geometry) return;
+
+      const feature = {
+        type: 'Feature',
+        properties: { id: g._id, name: g.name || 'Geofence' },
+        geometry: g.geometry
+      };
+
+      const group = L.geoJSON(feature, {
+        style: {
+          color: '#000000',
+          weight: 5,
+          opacity: 1,
+          fillColor: '#ffd000',
+          fillOpacity: 0.05
+        }
+      }).addTo(drawnItems);
+
+      zoneLayerGroups.set(g._id, group);
+
+      group.eachLayer(l => {
+        l.feature = feature;
+        if (feature.properties.name) l.bindPopup(feature.properties.name);
+        if (l.getBounds) {
+          l.on('click', () => {
+            const b = l.getBounds();
+            if (b && b.isValid()) map.fitBounds(b.pad(0.3));
+          });
+        }
+      });
+
+      const row = document.createElement('div');
+      row.className = 'zone-row';
+      row.dataset.id = g._id;
+      row.innerHTML = `
+        <div>
+          <span class="name">${feature.properties.name}</span>
+          <small>${g._id}</small>
+        </div>
+        <div class="zone-actions">
+          <button class="zone-btn timer" data-id="${g._id}" data-name="${feature.properties.name}">Timer</button>
+          <button class="zone-btn resize" data-id="${g._id}">Resize</button>
+          <button class="zone-btn rename" data-id="${g._id}">Rename</button>
+          <button class="zone-btn delete" data-id="${g._id}">Delete</button>
+        </div>
+      `;
+
+      row.addEventListener('click', (ev) => {
+        if (ev.target.closest('.zone-btn')) return;
+        let bounds = null;
+        drawnItems.eachLayer(gl => {
+          if (gl.getLayers) {
+            gl.getLayers().forEach(l => {
+              if (l.feature && l.feature.properties.id === g._id && l.getBounds) {
+                bounds = bounds ? bounds.extend(l.getBounds()) : l.getBounds();
+              }
+            });
+          }
+        });
+        if (bounds && bounds.isValid()) map.fitBounds(bounds.pad(0.3));
+      });
+
+      zoneList.appendChild(row);
+    }
+
+    function loadGeofences() {
+      fetch('/api/geofences')
+        .then(res => res.json())
+        .then(data => {
+          drawnItems.clearLayers();
+          zoneList.innerHTML = '';
+          zoneLayerGroups.clear();
+          zoneEditToolbars.clear();
+          currentEditingZoneId = null;
+
+          const zoneNamesLower = new Set();
+
+          data.forEach(g => {
+            addGeofenceToMapAndList(g);
+            if (g && g.name) {
+              zoneNamesLower.add(String(g.name).toLowerCase());
+            }
+          });
+
+          // Cleanup overrides for zones that no longer exist
+          if (zoneNamesLower.size) {
+            const toRemove = [];
+            zoneTimerOverrides.forEach((val, key) => {
+              const labelLower = (val.label || '').toLowerCase();
+              if (!zoneNamesLower.has(labelLower) && !zoneNamesLower.has(key)) {
+                toRemove.push(key);
+              }
+            });
+            if (toRemove.length) {
+              toRemove.forEach(k => zoneTimerOverrides.delete(k));
+              renderZoneOverrides();
+              updateSettingsBadge();
+              queueSettingsSave();
+            }
+          }
+        })
+        .catch(err => console.error('Failed to load geofences:', err));
+    }
+
+    loadGeofences();
+
+    if (hasDraw) {
+      try {
+        const drawControl = new L.Control.Draw({
+          edit: { featureGroup: drawnItems, remove: true },
+          draw: {
+            polygon: true,
+            rectangle: true,
+            circle: false,
+            polyline: false,
+            marker: false
+          }
+        });
+        map.addControl(drawControl);
+
+        map.on(L.Draw.Event.CREATED, function (e) {
+          const layer = e.layer;
+          drawnItems.addLayer(layer);
+          const gj = layer.toGeoJSON();
+
+          const defaultName = 'Zone ' + new Date().toLocaleTimeString();
+          const name = prompt('Name this geofence:', defaultName) || defaultName;
+
+          fetch('/api/geofences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, geojson: gj })
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.ok) loadGeofences();
+              else alert('Error saving geofence');
+            })
+            .catch(err => {
+              console.error(err);
+              alert('Failed to save geofence');
+            });
+        });
+
+        map.on(L.Draw.Event.EDITED, function (e) {
+          e.layers.eachLayer(layer => {
+            const feature = layer.feature;
+            const id = feature && feature.properties && feature.properties.id;
+            if (!id) return;
+            const gj = layer.toGeoJSON();
+            const name = feature.properties.name;
+            fetch('/api/geofences/' + id, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ geojson: gj, name })
+            })
+              .then(res => res.json())
+              .then(loadGeofences)
+              .catch(err => console.error('Update failed', err));
+          });
+        });
+
+        map.on(L.Draw.Event.DELETED, function (e) {
+          const deletions = [];
+          const deletedIds = [];
+          const deletedNamesLower = [];
+
+          e.layers.eachLayer(layer => {
+            const feature = layer.feature;
+            const id = feature && feature.properties && feature.properties.id;
+            const name = feature && feature.properties && feature.properties.name;
+            if (!id) return;
+
+            deletedIds.push(String(id));
+            if (name) {
+              deletedNamesLower.push(String(name).toLowerCase());
+            }
+
+            deletions.push(
+              fetch('/api/geofences/' + id, { method: 'DELETE' })
+                .then(res => res.json())
+                .catch(err => console.error('Delete failed', err))
+            );
+          });
+
+          Promise.all(deletions)
+            .then(() => {
+              // Clear timers for any deleted zones by zoneId or zoneName
+              if (deletedIds.length || deletedNamesLower.length) {
+                const keysToDelete = [];
+                zoneTimers.forEach((val, key) => {
+                  const matchesId =
+                    val.zoneId && deletedIds.includes(String(val.zoneId));
+                  const matchesName =
+                    deletedNamesLower.length &&
+                    val.zone &&
+                    deletedNamesLower.includes(String(val.zone).toLowerCase());
+                  if (matchesId || matchesName) {
+                    keysToDelete.push(key);
+                  }
+                });
+                keysToDelete.forEach(key => {
+                  zoneTimers.delete(key);
+                  completedTimers.delete(key);
+                  lastZoneState.delete(key);
+                });
+                renderZoneTimers();
+              }
+
+              // Remove per-zone overrides for deleted zone names
+              if (deletedNamesLower.length) {
+                const overrideKeysToRemove = [];
+                zoneTimerOverrides.forEach((val, key) => {
+                  const labelLower = (val.label || '').toLowerCase();
+                  if (
+                    deletedNamesLower.includes(labelLower) ||
+                    deletedNamesLower.includes(key)
+                  ) {
+                    overrideKeysToRemove.push(key);
+                  }
+                });
+                if (overrideKeysToRemove.length) {
+                  overrideKeysToRemove.forEach(k => zoneTimerOverrides.delete(k));
+                  renderZoneOverrides();
+                  updateSettingsBadge();
+                  queueSettingsSave();
+                }
+              }
+
+              loadGeofences();
+            })
+            .catch(err => console.error('Delete failed', err));
+        });
+      } catch (e) {
+        console.warn('Leaflet.draw failed to initialise, controls will not show.', e);
+        hasDraw = false;
+      }
+    }
+
+    zoneList.addEventListener('click', (e) => {
+      const id = e.target.dataset.id;
+      if (!id) return;
+
+      if (e.target.classList.contains('timer')) {
+        e.stopPropagation();
+        const row = e.target.closest('.zone-row');
+        const nameEl = row && row.querySelector('.name');
+        const zoneName = (nameEl && nameEl.textContent.trim()) || (e.target.dataset.name || '');
+        if (!zoneName) return;
+        const key = zoneName.toLowerCase();
+        const existing = zoneTimerOverrides.get(key);
+        const current = existing ? existing.minutes : zoneTimerMinutesDefault;
+
+        const input = prompt(
+          `Timer override for "${zoneName}" (minutes).\nLeave blank to remove override and use the default.`,
+          current ? String(current) : ''
+        );
+        if (input === null) return;
+        const trimmed = input.trim();
+
+        if (!trimmed) {
+          zoneTimerOverrides.delete(key);
+        } else {
+          const val = parseInt(trimmed, 10);
+          if (!Number.isFinite(val) || val <= 0 || val > 120) {
+            alert('Please enter a whole number between 1 and 120.');
+            return;
+          }
+          zoneTimerOverrides.set(key, { label: zoneName, minutes: val });
+        }
+        renderZoneOverrides();
+        updateSettingsBadge();
+        queueSettingsSave();
+        return;
+      }
+
+      if (e.target.classList.contains('resize')) {
+        e.stopPropagation();
+
+        if (!hasDraw) {
+          alert('Resize requires Leaflet.draw to be available.');
+          return;
+        }
+
+        const group = zoneLayerGroups.get(id);
+        if (!group) return;
+
+        const thisButton = e.target;
+        const isEditingThis = currentEditingZoneId === id;
+
+        if (currentEditingZoneId && currentEditingZoneId !== id) {
+          const prevToolbar = zoneEditToolbars.get(currentEditingZoneId);
+          if (prevToolbar && prevToolbar.disable) {
+            prevToolbar.disable();
+          }
+          const prevBtn = zoneList.querySelector(
+            '.zone-btn.resize[data-id="' + currentEditingZoneId + '"]'
+          );
+          if (prevBtn) prevBtn.textContent = 'Resize';
+          currentEditingZoneId = null;
+        }
+
+        if (!isEditingThis) {
+          let toolbar = zoneEditToolbars.get(id);
+          if (!toolbar) {
+            toolbar = new L.EditToolbar.Edit(map, {
+              featureGroup: zoneLayerGroups.get(id),
+              selectedPathOptions: {
+                maintainColor: true
+              }
+            });
+            zoneEditToolbars.set(id, toolbar);
+          }
+          toolbar.enable();
+          currentEditingZoneId = id;
+          thisButton.textContent = 'Save';
+        } else {
+          const toolbar = zoneEditToolbars.get(id);
+          if (toolbar && toolbar.disable) {
+            toolbar.disable();
+          }
+
+          const pendingSaves = [];
+
+          const group = zoneLayerGroups.get(id);
+          if (group) {
+            group.eachLayer(l => {
+              const feature = l.feature;
+              const gj = l.toGeoJSON();
+              const name = feature && feature.properties && feature.properties.name;
+
+              pendingSaves.push(
+                fetch('/api/geofences/' + id, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ geojson: gj, name })
+                })
+              );
+            });
+          }
+
+          Promise.all(pendingSaves)
+            .then(() => loadGeofences())
+            .catch(err => console.error('Resize save failed', err));
+
+          thisButton.textContent = 'Resize';
+          currentEditingZoneId = null;
+        }
+
+        return;
+      }
+
+      if (e.target.classList.contains('rename')) {
+        e.stopPropagation();
+        const newName = prompt('New name for this geofence:');
+        if (!newName) return;
+        fetch('/api/geofences/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        })
+          .then(res => res.json())
+          .then(() => {
+            loadGeofences();
+          })
+          .catch(err => console.error('Rename failed', err));
+      }
+
+      if (e.target.classList.contains('delete')) {
+        e.stopPropagation();
+        if (!confirm('Delete this geofence?')) return;
+
+        // get zone name so we can clear overrides for this zone
+        const rowEl   = e.target.closest('.zone-row');
+        const nameEl  = rowEl && rowEl.querySelector('.name');
+        const zoneName = (nameEl && nameEl.textContent.trim()) || '';
+
+        fetch('/api/geofences/' + id, { method: 'DELETE' })
+          .then(res => res.json())
+          .then(() => {
+            // Clear timers for this zoneId and/or zoneName
+            const keysToDelete = [];
+            zoneTimers.forEach((val, key) => {
+              const matchesId   = val.zoneId && String(val.zoneId) === String(id);
+              const matchesName = zoneName && val.zone && String(val.zone).toLowerCase() === zoneName.toLowerCase();
+              if (matchesId || matchesName) {
+                keysToDelete.push(key);
+              }
+            });
+            keysToDelete.forEach(key => {
+              zoneTimers.delete(key);
+              completedTimers.delete(key);
+              lastZoneState.delete(key);
+            });
+            renderZoneTimers();
+
+            // Clear any per-zone override for this zone name
+            if (zoneName) {
+              const overrideKey = zoneName.toLowerCase();
+              if (zoneTimerOverrides.has(overrideKey)) {
+                zoneTimerOverrides.delete(overrideKey);
+                renderZoneOverrides();
+                updateSettingsBadge();
+                queueSettingsSave();
+              }
+            }
+
+            loadGeofences();
+          })
+          .catch(err => console.error('Delete failed', err));
+      }
+    });
+
+    function getStatusClass(statusRaw) {
+      const s = (statusRaw || '').toString().toLowerCase();
+      if (s === 'clear') return 'green';
+      return 'red';
+    }
+
+    function createVehicleIcon(label, status) {
+      const cls = getStatusClass(status);
+      const safe = (label || '?').toString();
+      return L.divIcon({
+        className: '',
+        html: `<div class="vehicle-pill ${cls}">${safe}</div>`,
+        iconSize: [50, 26],
+        iconAnchor: [25, 26]
+      });
+    }
+
+    function updateVehicleIconScale() {
+      const zoom = map.getZoom();
+      let scale = 1 + 0.08 * (zoom - BASE_ZOOM);
+      if (scale < 0.7) scale = 0.7;
+      if (scale > 1.8) scale = 1.8;
+      document.querySelectorAll('.vehicle-pill').forEach(el => {
+        el.style.transform = `scale(${scale})`;
+      });
+    }
+
+    map.on('zoomend', updateVehicleIconScale);
+
+    function is900Series(id) {
+      const n = parseInt(id, 10);
+      if (Number.isNaN(n)) return false;
+      return n >= 900 && n <= 999;
+    }
+
+    if (hackneyOnlyEl) {
+      hackneyOnlyEl.addEventListener('change', () => {
+        filter900Only = hackneyOnlyEl.checked;
+        clearAutoBusyHistory();
+        refreshVehicles();
+        loadEvents();
+      });
+    }
+
+    function rebuildVehicleList() {
+      if (!vehicleListEl) return;
+
+      const searchTerm = (vehicleSearchEl && vehicleSearchEl.value || '').trim().toLowerCase();
+
+      const ids = Array.from(allVehicleIds)
+        .filter(id => {
+          if (filter900Only && !is900Series(id)) return false;
+          if (searchTerm && !id.toLowerCase().includes(searchTerm)) return false;
+          return true;
+        })
+        .sort();
+
+      vehicleListEl.innerHTML = '';
+
+      if (!ids.length) {
+        const empty = document.createElement('div');
+        empty.className = 'vehicle-empty';
+        empty.textContent = 'No vehicles match the current filters.';
+        vehicleListEl.appendChild(empty);
+        return;
+      }
+
+      ids.forEach(id => {
+        const row = document.createElement('label');
+        row.className = 'vehicle-row';
+        row.innerHTML = `
+          <input type="checkbox" data-id="${id}" />
+          <span>${id}</span>
+        `;
+        const checkbox = row.querySelector('input');
+        if (activeVehicleIds === null) {
+          checkbox.checked = true;
+        } else {
+          checkbox.checked = activeVehicleIds.has(id);
+        }
+        checkbox.addEventListener('change', handleVehicleCheckboxesChanged);
+        vehicleListEl.appendChild(row);
+      });
+    }
+
+    function handleVehicleCheckboxesChanged() {
+      if (!vehicleListEl) return;
+
+      const checkboxes = vehicleListEl.querySelectorAll('input[type="checkbox"][data-id]');
+      const selectedIds = Array.from(checkboxes)
+        .filter(cb => cb.checked)
+        .map(cb => cb.dataset.id);
+
+      if (selectedIds.length === 0) {
+        activeVehicleIds = new Set();
+      } else {
+        const availableIds = Array.from(allVehicleIds)
+          .filter(id => !filter900Only || is900Series(id));
+
+        if (selectedIds.length === availableIds.length) {
+          activeVehicleIds = null;
+        } else {
+          activeVehicleIds = new Set(selectedIds);
+        }
+      }
+
+      clearAutoBusyHistory();
+      rebuildVehicleList();
+      loadEvents();
+    }
+
+    if (vehicleSearchEl) {
+      vehicleSearchEl.addEventListener('input', () => {
+        rebuildVehicleList();
+      });
+    }
+
+    if (vehicleAllBtn) {
+      vehicleAllBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        activeVehicleIds = null;
+        if (vehicleSearchEl) vehicleSearchEl.value = '';
+        clearAutoBusyHistory();
+        rebuildVehicleList();
+        loadEvents();
+      });
+    }
+
+    if (vehicleNoneBtn) {
+      vehicleNoneBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        activeVehicleIds = new Set();
+        clearAutoBusyHistory();
+        rebuildVehicleList();
+        loadEvents();
+      });
+    }
+
+    if (modeRadios && modeRadios.length) {
+      modeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          statusUpdateMode = e.target.value;
+          clearAutoBusyHistory();
+          updateSummary();
+          queueSettingsSave();
+        });
+      });
+    }
+
+    function shouldApplyStatusApiToVehicle(callsign) {
+      if (filter900Only && !is900Series(callsign)) return false;
+      if (activeVehicleIds && activeVehicleIds.size > 0) {
+        return activeVehicleIds.has(callsign);
+      }
+      return true;
+    }
+
+    function appendBusyLog(entry) {
+      busyLog.push(entry);
+      if (busyLog.length > 50) busyLog.shift();
+      renderBusyLog();
+      updateEventHeaderCounts();
+    }
+
+    /**
+     * Send a message to the vehicle for a specific trigger.
+     * triggerType: 'AUTOBUSY' | 'TIMER'
+     */
+    function sendVehicleMessageForTrigger(triggerType, callsign, zone, rawEvent) {
+      if (statusUpdateMode === 'off') return;
+
+      // For timer messages, restrict to zones containing "station"
+      if (triggerType === 'TIMER') {
+        const zoneLc = (zone || '').toString().toLowerCase();
+        if (!zoneLc.includes('station')) return;
+      }
+
+      if (triggerType === 'AUTOBUSY' && !autoBusyMsgEnabled) return;
+      if (triggerType === 'TIMER'    && !timerMsgEnabled)    return;
+
+      const now      = new Date();
+      const nowLabel = now.toLocaleTimeString();
+
+      const text =
+        triggerType === 'AUTOBUSY'
+          ? (autoBusyMsgText || 'AutoPob Activated')
+          : (timerMsgText || 'Clear Timer Expired');
+
+      const baseLogEntry = {
+        ts: now,
+        timeLabel: nowLabel,
+        callsign,
+        zone: zone || 'Zone',
+        mode: statusUpdateMode,
+        result: '',
+        message: ''
+      };
+
+      if (statusUpdateMode === 'dry-run') {
+        appendBusyLog({
+          ...baseLogEntry,
+          result: 'dry-run',
+          message: `MSG[${triggerType}] (not sent) → "${text}" · callsign:${callsign}`
+        });
+        return;
+      }
+
+      // LIVE mode – call backend which resolves callsign → vehicleId
+      fetch('/api/send-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callsign,
+          text,
+          triggerType,
+          zone,
+          rawEvent: rawEvent || null
+        })
+      })
+        .then(async res => {
+          let data = null;
+          try { data = await res.json(); } catch (_) {}
+
+          if (!res.ok || (data && data.ok === false)) {
+            const errText = data && data.error ? data.error : '';
+            appendBusyLog({
+              ...baseLogEntry,
+              result: 'error',
+              message: `MSG[${triggerType}] HTTP ${res.status}${errText ? ' → ' + errText : ''}`
+            });
+          } else {
+            const idInfo = data && data.autocabId ? `veh:${data.autocabId}` : 'veh:unknown';
+            appendBusyLog({
+              ...baseLogEntry,
+              result: 'ok',
+              message: `MSG[${triggerType}] sent → "${text}" · ${idInfo}`
+            });
+          }
+        })
+        .catch(err => {
+          appendBusyLog({
+            ...baseLogEntry,
+            result: 'error',
+            message: `MSG[${triggerType}] error: ${err.message || 'Fetch error'}`
+          });
+        });
+    }
+
+    function queueStatusApiForExit(ev, callsign, statusRaw, zone, timeStr) {
+      if (statusUpdateMode === 'off') return;
+
+      const zoneNameLc = (zone || '').toString().toLowerCase();
+      if (!zoneNameLc.includes('station')) return;
+
+      const s = (statusRaw || '').toString().toLowerCase();
+      if (s !== 'clear') return;
+
+      if (!shouldApplyStatusApiToVehicle(callsign)) return;
+
+      const key = ['EXIT', callsign, zone || '', ev.ts || timeStr || ''].join('|');
+      if (processedExitEvents.has(key)) return;
+      processedExitEvents.add(key);
+
+      const now       = new Date();
+      const nowLabel  = now.toLocaleTimeString();
+      const tsNumNow  = now.getTime();
+
+      autoBusyMap.set(callsign, {
+        time: nowLabel,
+        zone,
+        mode: statusUpdateMode.toUpperCase(),
+        tsNum: tsNumNow
+      });
+
+      lastAutoBusyText = `${callsign} (${zone || 'Zone'} at ${nowLabel})`;
+      updateSummary();
+      updateEventHeaderCounts();
+
+      // Trigger vehicle message for AutoBusy
+      sendVehicleMessageForTrigger('AUTOBUSY', callsign, zone, ev);
+
+      const baseLogEntry = {
+        ts: now,
+        timeLabel: nowLabel,
+        callsign,
+        zone: zone || 'Zone',
+        mode: statusUpdateMode,
+        result: '',
+        message: ''
+      };
+
+      if (statusUpdateMode === 'dry-run') {
+        appendBusyLog({
+          ...baseLogEntry,
+          result: 'dry-run',
+          message: 'No Busy API call (dry-run)'
+        });
+        return;
+      }
+
+      fetch(STATUS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callsign,
+          status: 'Busy',
+          reason: 'geofence-exit',
+          zone,
+          eventTime: ev.ts || timeStr,
+          rawEvent: ev
+        })
+      })
+        .then(res => {
+          if (!res.ok) {
+            appendBusyLog({
+              ...baseLogEntry,
+              result: 'error',
+              message: `Busy API HTTP ${res.status}`
+            });
+          } else {
+            appendBusyLog({
+              ...baseLogEntry,
+              result: 'ok',
+              message: `Busy API HTTP ${res.status}`
+            });
+          }
+        })
+        .catch(err => {
+          appendBusyLog({
+            ...baseLogEntry,
+            result: 'error',
+            message: err.message || 'Busy API fetch error'
+          });
+        });
+    }
+
+    // --- Vehicles: only selected, no "Not Working" on map ---
+    function refreshVehicles() {
+      fetch('/api/vehicles')
+        .then(res => res.json())
+        .then(data => {
+          const seen = new Set();
+          allVehicleIds = new Set();
+
+          data.forEach(v => {
+            if (!v) return;
+            if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return;
+
+            const callSignLabel = String(
+              v.Callsign || v.callSign || v.callsign || v.vehicleId || v.id || v.Id || '??'
+            ).trim();
+            if (!callSignLabel) return;
+
+            // Track all IDs for selection list
+            allVehicleIds.add(callSignLabel);
+
+            const status = v.status || v.VehicleStatus || v.vehicleStatus || 'Unknown';
+            const statusLc = status.toString().toLowerCase();
+
+            const isNotWorking =
+              statusLc === 'notworking' ||
+              statusLc === 'not working' ||
+              (statusLc.includes('not') && statusLc.includes('work'));
+
+            const passesHackney = !filter900Only || is900Series(callSignLabel);
+
+            let passesSelection = true;
+            if (activeVehicleIds === null) {
+              passesSelection = true;
+            } else if (activeVehicleIds instanceof Set) {
+              if (activeVehicleIds.size === 0) {
+                passesSelection = false;
+              } else {
+                passesSelection = activeVehicleIds.has(callSignLabel);
+              }
+            }
+
+            const shouldDisplay = passesHackney && passesSelection && !isNotWorking;
+
+            if (shouldDisplay) {
+              seen.add(callSignLabel);
+
+              // Track position for heatmap/trails
+              trackVehiclePositionForVisuals(callSignLabel, v.lat, v.lon);
+
+              if (!vehicleMarkers[callSignLabel]) {
+                vehicleMarkers[callSignLabel] = L.marker([v.lat, v.lon], {
+                  icon: createVehicleIcon(callSignLabel, status),
+                  riseOnHover: true
+                }).addTo(map);
+              } else {
+                vehicleMarkers[callSignLabel].setLatLng([v.lat, v.lon]);
+                vehicleMarkers[callSignLabel].setIcon(createVehicleIcon(callSignLabel, status));
+              }
+
+              vehicleMarkers[callSignLabel].bindPopup(
+                `<b>Vehicle ${callSignLabel}</b><br>Status: ${status}${v.ts ? `<br>${v.ts}` : ''}`
+              );
+            } else {
+              if (vehicleMarkers[callSignLabel]) {
+                map.removeLayer(vehicleMarkers[callSignLabel]);
+                delete vehicleMarkers[callSignLabel];
+              }
+            }
+          });
+
+          // Remove markers for vehicles not seen this refresh
+          Object.keys(vehicleMarkers).forEach(id => {
+            if (!seen.has(id)) {
+              map.removeLayer(vehicleMarkers[id]);
+              delete vehicleMarkers[id];
+            }
+          });
+
+          currentVisibleCount = seen.size;
+          rebuildVehicleList();
+          updateVehicleIconScale();
+          updateSummary();
+
+          // Update heatmap & trails based on latest visibility
+          updateHeatLayer();
+          updateTrailsLayer(seen);
+        })
+        .catch(err => {
+          console.error('Failed to load vehicles:', err);
+          currentVisibleCount = 0;
+          updateSummary();
+        });
+    }
+
+    setInterval(refreshVehicles, 3000);
+    refreshVehicles();
+
+    // NEW: central function to update the small metrics in Events header
+    function updateEventHeaderCounts() {
+      if (eventsCountEl)   eventsCountEl.textContent   = eventsCache.length || 0;
+      if (timersCountEl)   timersCountEl.textContent   = zoneTimers.size || 0;
+      if (autobusyCountEl) autobusyCountEl.textContent = autoBusyMap.size || 0;
+    }
+
+    function renderZoneTimers() {
+      if (!zoneTimerListEl) return;
+
+      const now = Date.now();
+      const rows = [];
+
+      zoneTimers.forEach((val, key) => {
+        const remainingMs = val.endTs - now;
+
+        if (remainingMs <= 0) {
+          // Timer expired – send Clear message only once per key
+          if (!completedTimers.has(key)) {
+            completedTimers.add(key);
+            sendVehicleMessageForTrigger('TIMER', val.callsign, val.zone);
+          }
+          zoneTimers.delete(key);
+          return;
+        }
+
+        const totalSec = Math.floor(remainingMs / 1000);
+        const m = Math.floor(totalSec / 60);
+        const s = totalSec % 60;
+        const label = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        rows.push({ ...val, label });
+      });
+
+      zoneTimerListEl.innerHTML = '';
+
+      if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'zone-timer-empty';
+        empty.textContent = 'No active timers.';
+        zoneTimerListEl.appendChild(empty);
+        updateEventHeaderCounts();
+        return;
+      }
+
+      rows.sort((a, b) => a.endTs - b.endTs);
+
+      rows.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'zone-timer-row';
+        row.innerHTML = `
+          <span class="name">${item.callsign} · ${item.zone}</span>
+          <span class="clock">${item.label}</span>
+        `;
+        zoneTimerListEl.appendChild(row);
+      });
+
+      updateEventHeaderCounts();
+    }
+
+    setInterval(renderZoneTimers, 1000);
+
+    function renderEvents() {
+      if (!eventList) return;
+
+      eventList.innerHTML = '';
+
+      const term = (eventSearchTerm || '').trim().toLowerCase();
+
+      eventsCache.forEach(item => {
+        if (item.typeKey === 'ENTER' && !showEnter) return;
+        if (item.typeKey === 'EXIT'  && !showExit)  return;
+        if (item.typeKey === 'AUTO'  && !showAuto)  return;
+
+        if (term) {
+          const haystack = `${item.callsign || ''} ${item.zone || ''}`.toLowerCase();
+          if (!haystack.includes(term)) return;
+        }
+
+        let typeHtml;
+        if (item.typeKey === 'AUTO') {
+          typeHtml = `<span class="event-type auto">AUTO</span>`;
+        } else if (item.typeKey === 'ENTER') {
+          typeHtml = `<span class="event-type enter">ENTER</span>`;
+        } else {
+          typeHtml = `<span class="event-type exit">EXIT</span>`;
+        }
+
+        let statusChipClass;
+        let statusLabel;
+
+        if (item.typeKey === 'AUTO') {
+          statusChipClass = 'status-chip--busy';
+          statusLabel = item.mode ? `BUSY (${item.mode})` : 'BUSY';
+        } else {
+          const cls = getStatusClass(item.statusRaw);
+          statusChipClass = (cls === 'green') ? 'status-chip--clear' : 'status-chip--busy';
+          statusLabel = item.statusRaw ? String(item.statusRaw).toUpperCase() : '';
+        }
+
+        const statusHtml = statusLabel
+          ? `<span class="status-chip ${statusChipClass}">${statusLabel}</span>`
+          : '';
+
+        const row = document.createElement('div');
+        row.className = 'event-row';
+        row.innerHTML = `
+          <div>
+            ${typeHtml}
+            <span class="name">${item.callsign}</span>
+            ${statusHtml}
+            <small>${item.zone}</small>
+          </div>
+          <div style="text-align:right;">
+            <small>${item.timeStr || ''}</small>
+          </div>
+        `;
+        eventList.appendChild(row);
+      });
+
+      updateEventHeaderCounts();
+    }
+
+    function loadEvents() {
+      fetch('/api/events')
+        .then(res => {
+          if (!res.ok) throw new Error('No /api/events endpoint');
+          return res.json();
+        })
+        .then(events => {
+          // Oldest first so state tracking is correct
+          events.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+          const latestMap = new Map();
+
+          events.forEach(ev => {
+            const rawType = (ev.type || '').toUpperCase();
+            const typeKey = rawType === 'ENTER' ? 'ENTER' : 'EXIT';
+
+            const callsign = String(
+              ev.callSign || ev.callsign || ev.vehicleId || ev.id || '?'
+            ).trim();
+
+            const zoneName = ev.geofenceName || ev.geofenceId || 'Zone';
+            const zoneId   = ev.geofenceId || null;
+
+            const tsNum = Date.parse(ev.ts || '') || 0;
+            const timeStr = ev.ts ? new Date(ev.ts).toLocaleTimeString() : '';
+
+            if (eventsEpoch && tsNum && tsNum < eventsEpoch) return;
+
+            if (filter900Only && !is900Series(callsign)) return;
+            if (activeVehicleIds && activeVehicleIds.size > 0 && !activeVehicleIds.has(callsign)) return;
+            if (activeVehicleIds && activeVehicleIds.size === 0) return;
+
+            const statusRaw = ev.status || ev.VehicleStatus || ev.vehicleStatus || ev.state;
+
+            const autocabId =
+              ev.autocabId ??
+              ev.AutocabId ??
+              ev.Id ??
+              (ev.Vehicle && ev.Vehicle.Id);
+
+            const key = `${typeKey}:${callsign}`;
+            const stateKey = `${callsign}|${zoneId || zoneName}`;
+
+            latestMap.set(key, {
+              typeKey,
+              callsign,
+              zone: zoneName,
+              zoneId,
+              statusRaw,
+              tsNum,
+              timeStr,
+              autocabId,
+              raw: ev
+            });
+
+            // Tight zone countdown logic
+            const prevState = lastZoneState.get(stateKey) || 'EXIT';
+
+            if (typeKey === 'ENTER') {
+              if (prevState !== 'ENTER') {
+                const durationMin = getTimerDurationForZone(zoneName);
+                if (durationMin > 0) {
+                  const baseTs = tsNum || Date.now();
+                  zoneTimers.set(stateKey, {
+                    callsign,
+                    zone: zoneName,
+                    zoneId,
+                    startTs: baseTs,
+                    endTs: baseTs + durationMin * 60000
+                  });
+                  // New timer => clear any previous completion flag
+                  completedTimers.delete(stateKey);
+                }
+              }
+              lastZoneState.set(stateKey, 'ENTER');
+            } else {
+              zoneTimers.delete(stateKey);
+              lastZoneState.set(stateKey, 'EXIT');
+              queueStatusApiForExit(ev, callsign, statusRaw, zoneName, timeStr);
+            }
+          });
+
+          // Add AUTO entries from AutoBusy map
+          autoBusyMap.forEach((log, callsign) => {
+            const key = `AUTO:${callsign}`;
+            latestMap.set(key, {
+              typeKey: 'AUTO',
+              callsign,
+              zone: log.zone || 'Zone',
+              statusRaw: 'BUSY',
+              tsNum: log.tsNum,
+              timeStr: log.time,
+              mode: log.mode
+            });
+          });
+
+          const latestArray = Array.from(latestMap.values()).sort((a, b) => b.tsNum - a.tsNum);
+
+          eventsCache = latestArray;
+          renderEvents();
+        })
+        .catch(() => {});
+    }
+
+    setInterval(loadEvents, 3000);
+    loadEvents();
+
+    if (filterEnterEl) {
+      filterEnterEl.addEventListener('change', () => {
+        showEnter = filterEnterEl.checked;
+        renderEvents();
+      });
+    }
+    if (filterExitEl) {
+      filterExitEl.addEventListener('change', () => {
+        showExit = filterExitEl.checked;
+        renderEvents();
+      });
+    }
+    if (filterAutoEl) {
+      filterAutoEl.addEventListener('change', () => {
+        showAuto = filterAutoEl.checked;
+        renderEvents();
+      });
+    }
+    if (eventSearchEl) {
+      eventSearchEl.addEventListener('input', () => {
+        eventSearchTerm = eventSearchEl.value || '';
+        renderEvents();
+      });
+    }
+
+    // Initial settings load from backend
+    loadSettingsFromServer();
+  </script>
+</body>
+</html>

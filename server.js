@@ -33,6 +33,7 @@ const AUTOBUSY_PENDING_LOCK_STALE_MS = envNum('AUTOBUSY_PENDING_LOCK_STALE_SECON
 const AUTOBUSY_PENDING_MAX_MS = envNum('AUTOBUSY_PENDING_MAX_SECONDS', 180) * 1000;
 const AUTOBUSY_CALLSIGN_MIN = envNum('AUTOBUSY_CALLSIGN_MIN', 900);
 const AUTOBUSY_CALLSIGN_MAX = envNum('AUTOBUSY_CALLSIGN_MAX', 999);
+const AUTOBUSY_ASSUME_CLEAR_WHEN_STATUS_MISSING = String(process.env.AUTOBUSY_ASSUME_CLEAR_WHEN_STATUS_MISSING || 'false').toLowerCase() === 'true';
 const VEHICLE_ONLINE_WINDOW_MS = envNum('VEHICLE_ONLINE_WINDOW_MS', 90000);
 
 mongoose.connect(MONGO_URI, { dbName: MONGO_DB })
@@ -170,41 +171,68 @@ function pick(obj, keys) {
   return undefined;
 }
 
+function toNumber(value) {
+  if (value == null || value === '') return NaN;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return Number(value);
+  if (typeof value === 'object') {
+    for (const key of ['TotalDegrees', 'totalDegrees', 'degrees', 'Degrees', 'value', 'Value']) {
+      if (value[key] != null && value[key] !== '') return Number(value[key]);
+    }
+  }
+  return Number(value);
+}
+
 function parseLatLon(body) {
-  const lat = pick(body, [
+  const latRaw = pick(body, [
     'lat', 'Lat', 'latitude', 'Latitude', 'position.lat', 'position.latitude',
-    'Position.Latitude', 'Location.Latitude', 'location.latitude',
+    'Position.Latitude', 'Location.Latitude.TotalDegrees', 'Location.Latitude.totalDegrees',
+    'Location.Latitude', 'location.latitude',
     'VehicleLocation.Latitude', 'vehicleLocation.latitude', 'point.latitude'
   ]);
-  const lon = pick(body, [
+  const lonRaw = pick(body, [
     'lon', 'lng', 'Lon', 'Lng', 'longitude', 'Longitude', 'position.lon', 'position.lng', 'position.longitude',
-    'Position.Longitude', 'Location.Longitude', 'location.longitude',
+    'Position.Longitude', 'Location.Longitude.TotalDegrees', 'Location.Longitude.totalDegrees',
+    'Location.Longitude', 'location.longitude',
     'VehicleLocation.Longitude', 'vehicleLocation.longitude', 'point.longitude'
   ]);
-  return { lat: Number(lat), lon: Number(lon) };
+  return { lat: toNumber(latRaw), lon: toNumber(lonRaw) };
+}
+
+function resolveCallsignFromVehicleId(autocabId) {
+  const idNum = Number(autocabId);
+  if (Number.isFinite(idNum) && vehicleDirectoryById.has(idNum)) return vehicleDirectoryById.get(idNum);
+  if (String(process.env.VEHICLE_AUTOID_AS_CALLSIGN || '').toLowerCase() === 'true') return normaliseCallsign(autocabId);
+  return '';
 }
 
 function normaliseHackneyLocationPayload(body) {
   const source = Array.isArray(body) ? body : (Array.isArray(body?.vehicles) ? body.vehicles : Array.isArray(body?.Vehicles) ? body.Vehicles : Array.isArray(body?.items) ? body.items : [body]);
   return source.map((item) => {
     const { lat, lon } = parseLatLon(item);
+    const autocabId = pick(item, [
+      'VehicleAutoID', 'VehicleAutoId', 'vehicleAutoID', 'vehicleAutoId',
+      'autocabId', 'AutocabId', 'id', 'Id', 'vehicleId', 'VehicleId', 'Vehicle.Id'
+    ]);
     const callsign = normaliseCallsign(pick(item, [
       'callsign', 'callSign', 'Callsign', 'CallSign', 'vehicleCallsign', 'VehicleCallsign',
       'vehicle.callsign', 'Vehicle.callsign', 'Vehicle.Callsign', 'driverCallsign', 'DriverCallsign'
-    ]));
-    const autocabId = pick(item, ['autocabId', 'AutocabId', 'id', 'Id', 'vehicleId', 'VehicleId', 'Vehicle.Id']);
+    ])) || resolveCallsignFromVehicleId(autocabId);
     const status = normaliseStatus(pick(item, [
-      'status', 'Status', 'vehicleStatus', 'VehicleStatus', 'state', 'State', 'vehicle.state', 'Vehicle.State', 'Vehicle.Status'
+      'status', 'Status', 'vehicleStatus', 'VehicleStatus', 'state', 'State', 'vehicle.state', 'Vehicle.State', 'Vehicle.Status',
+      'MeterState', 'meterState', 'BookingStatus', 'bookingStatus'
     ])) || 'Unknown';
-    const eventTime = String(pick(item, ['eventTime', 'EventTime', 'timestamp', 'Timestamp', 'time', 'Time', 'receivedAt', 'RecordedAtTime']) || new Date().toISOString());
+    const eventTime = String(pick(item, ['Received', 'received', 'eventTime', 'EventTime', 'timestamp', 'Timestamp', 'time', 'Time', 'receivedAt', 'RecordedAtTime']) || new Date().toISOString());
+    const speedRaw = pick(item, ['SpeedDetails.SpeedMph', 'SpeedDetails.SpeedKph', 'speed', 'Speed']);
+    const headingRaw = pick(item, ['HeadingDetails.HeadingDegrees', 'heading', 'Heading', 'bearing', 'Bearing']);
     return {
       callsign,
       autocabId,
       lat,
       lon,
       accuracy: Number(pick(item, ['accuracy', 'Accuracy'])) || undefined,
-      speed: Number(pick(item, ['speed', 'Speed'])) || undefined,
-      heading: Number(pick(item, ['heading', 'Heading', 'bearing', 'Bearing'])) || undefined,
+      speed: toNumber(speedRaw) || undefined,
+      heading: toNumber(headingRaw) || undefined,
       status,
       eventTime,
       raw: item
@@ -710,9 +738,17 @@ async function handleLocationPoints(points) {
 
 app.post(['/HackneyLocation', '/hackneylocation', '/api/HackneyLocation', '/api/hackney-location'], requireTrackerKey, async (req, res) => {
   lastWebhook = { at: new Date().toISOString(), path: req.path, headers: req.headers, body: req.body };
-  const points = normaliseHackneyLocationPayload(req.body);
-  if (!points.length) return res.status(400).json({ ok: false, error: 'No valid vehicle location points found in webhook body' });
   try {
+    await refreshVehicleDirectory(false);
+    const points = normaliseHackneyLocationPayload(req.body);
+    if (!points.length) {
+      return res.status(202).json({
+        ok: true,
+        received: Array.isArray(req.body) ? req.body.length : 1,
+        processed: [],
+        warning: 'Webhook received but no valid points after normalisation. Check callsign mapping from VehicleAutoID.'
+      });
+    }
     const processed = await handleLocationPoints(points);
     res.json({ ok: true, received: points.length, processed });
   } catch (err) {
@@ -806,6 +842,7 @@ app.get('/api/status', async (_req, res) => {
     mongoReadyState: mongoose.connection.readyState,
     lastWebhook,
     vehiclesInMemory: vehicles.size,
+    vehicleKeysInMemory: Array.from(vehicles.keys()).slice(0, 25),
     settings: serialiseSettings(await getOrCreateSettings()),
     envRules: {
       AUTOBUSY_LOCATION_HISTORY_POINTS,

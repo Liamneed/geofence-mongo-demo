@@ -1,6 +1,6 @@
 {
   "name": "geofence-mongo-demo-webhook-stale-exit-fix",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Server-side Auto POB geofence system using HackneyLocation webhook, MongoDB, Turf and robust stale-exit protection.",
   "main": "server.js",
   "scripts": {

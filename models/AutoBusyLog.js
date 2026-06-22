@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const AutoBusyLogSchema = new mongoose.Schema({
-  decisionKey: { type: String, index: true },
+  decisionKey: { type: String },
   callsign: { type: String, index: true },
   zone: { type: String, index: true },
   geofenceId: { type: String },

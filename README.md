@@ -367,3 +367,10 @@ Both are required. This prevents accidental live sends from only changing one se
 This version handles HackneyLocation payloads sent as an array of vehicles. It also accepts `VehicleAutoID` as the vehicle key when no separate callsign field is present, and uses `Received` as the event timestamp. This should make `/api/status` show `vehiclesInMemory` above 0 after the webhook is received.
 
 If your webhook does not include vehicle status, keep `AUTOBUSY_ASSUME_CLEAR_WHEN_STATUS_MISSING=false` for safe dry-run testing. Only set it to `true` if you are happy for location-only vehicles to be treated as Clear.
+
+
+## v2.0.2
+
+- Dashboard now loads `/api/vehicles` and plots current vehicle markers on the Leaflet map.
+- Yellow markers are 900-999 AutoBusy callsigns; blue markers are other vehicles.
+- Stale vehicles display faded.

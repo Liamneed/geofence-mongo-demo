@@ -1,20 +1,16 @@
-// models/Geofence.js
 const mongoose = require('mongoose');
 
-const GeofenceSchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true },
-    geometry: {
-      type: { type: String, enum: ['Polygon', 'MultiPolygon', 'LineString'], required: true },
-      coordinates: { type: Array, required: true }
-    }
-  },
-  {
-    timestamps: true
-  }
-);
+const GeofenceSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  geometry: { type: Object, required: true },
+  properties: { type: Object, default: {} },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
 
-// 2dsphere index for spatial queries if needed
-GeofenceSchema.index({ geometry: '2dsphere' });
+GeofenceSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
 
 module.exports = mongoose.model('Geofence', GeofenceSchema);
